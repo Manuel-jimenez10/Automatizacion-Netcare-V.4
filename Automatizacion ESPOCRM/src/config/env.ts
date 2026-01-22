@@ -14,9 +14,10 @@ export const env = {
   webhookSecret: process.env.WEBHOOK_SECRET || '',
   testPhoneNumber: process.env.TEST_PHONE_NUMBER || '', // Número seguro para pruebas
   publicUrl: process.env.PUBLIC_URL || 'http://localhost:3000', // URL pública para Twilio
-  // Nombres de campos en EspoCRM (configurables)
-  fieldCotizacionPropuesta: 'cotizacinPropuesta', // Verificar nombre real en EspoCRM (probable: cotizaciNPropuesta)
-  fieldCotizacionEnviadaWhatsapp: 'cotizacinEnviadaPorWhatsapp', // Verificar nombre real
+  // Nombres de campos en EspoCRM (CONFIRMADOS)
+  fieldCotizacionPropuesta: 'cotizacinPropuesta', // Archivo PDF de la cotización
+  fieldCotizacionEnviadaWhatsapp: 'cotizacinEnviadaPorWhatsapp', // Fecha de envío por WhatsApp
+  twilioStatusCallbackUrl: process.env.TWILIO_STATUS_CALLBACK_URL
 };
 
 

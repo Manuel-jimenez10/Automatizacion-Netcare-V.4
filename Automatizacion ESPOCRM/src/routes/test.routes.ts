@@ -1,10 +1,13 @@
 import { Router } from 'express';
-import { testWhatsApp } from '../controllers/test.controller';
+import { testWhatsApp, testTemplateMessage } from '../controllers/test.controller';
 
 const router = Router();
 
-// 🧪 Ruta de prueba - NO requiere EspoCRM
+// 🧪 Ruta de prueba - Mensaje simple SIN template
 router.get('/send-whatsapp', testWhatsApp);
+
+// 🧪 Ruta de prueba - Mensaje CON template
+router.get('/test-template', testTemplateMessage);
 
 // 🚀 Ruta para disparar el Job manualmente
 router.get('/trigger-job', async (_req, res) => {

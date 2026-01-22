@@ -33,6 +33,8 @@ export interface EspoCRMQuote {
   datePresented?: string;
   accountId?: string;
   accountName?: string;
+  billingContactId?: string; // Nuevo campo para contacto de facturación
+  billingContactName?: string;
   followUpSentAt?: string; // Campo custom para marcar como notificada
   cotizacinPropuestaId?: string; // ID del archivo PDF adjunto
   cotizacinEnviadaPorWhatsapp?: string; // Fecha de último envío por WhatsApp
@@ -50,9 +52,28 @@ export interface EspoCRMAccount {
   phone?: string;
 }
 
-// Tipo de utilidad para validar números de teléfono
 export interface PhoneValidation {
   isValid: boolean;
   formattedNumber?: string;
   error?: string;
+}
+
+export interface WhatsappMessage {
+  id?: string;
+  name: string; // Phone number
+  text: string;
+  type: 'In' | 'Out';
+  status: 'Delivered' | 'Read' | 'Queued' | 'Sent' | 'Error';
+  whatsappConversationId?: string; // Legacy/Correct spelling
+  whatsappConverstionId?: string; // Actual EspoCRM field with typo
+  messageSid?: string; // Twilio Message SID
+  description?: string; // Sometimes used for text
+  contactId?: string; // Link to Contact entity
+}
+
+export interface WhatsappConverstion {
+  id: string;
+  name: string;
+  fechaHoraUltimoMensaje?: string;
+  description?: string; // Last message text often goes here in Espo
 }

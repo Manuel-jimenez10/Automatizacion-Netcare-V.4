@@ -1,0 +1,12 @@
+<IfModule (fedora|rhel|centos|cloudlinux)_passenger_module>
+    PassengerAppRoot "/home/nc/api-express-espocrm"
+    PassengerBaseURI "/api-express"
+    PassengerAppType node
+    PassengerStartupFile server.js
+</IfModule>
+
+RewriteEngine On
+RewriteRule ^$ http://127.0.0.1:3000/ [P,L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ http://127.0.0.1:3000/$1 [P,L]

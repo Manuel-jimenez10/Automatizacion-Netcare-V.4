@@ -105,29 +105,40 @@ export class QuoteFollowUpService {
     console.log(`📋 Procesando Quote: "${quote.name}" (ID: ${quote.id})`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-    // 1. Validar que tiene Account asociado
-    if (!quote.accountId) {
-      throw new Error('Quote no tiene Account asociado (accountId faltante)');
+    // 1. Validar que tiene Contacto de Facturación (Billing Contact)
+    // El usuario solicitó explícitamente usar Billing Contact en lugar de Account
+    // 1. Validar que tiene Contacto de Facturación (Billing Contact)
+    // El usuario solicitó explícitamente usar Billing Contact. Si no existe, error.
+    if (!quote.billingContactId) {
+       console.log(`⚠️ Advertencia: Quote "${quote.name}" (ID: ${quote.id}) no tiene Billing Contact asociado.`);
+       throw new Error(`La Quote "${quote.name}" no tiene un Contacto de Facturación (Billing Contact) asignado. Importante: No se usará la cuenta (Account) como respaldo.`);
     }
 
-    console.log(`🔗 Account ID: ${quote.accountId}`);
+    console.log(`🔗 Billing Contact ID: ${quote.billingContactId}`);
 
-    // 2. Obtener Account
-    const account = await this.espoCRMClient.getAccount(quote.accountId);
+    // 2. Obtener Contacto
+    const contact = await this.espoCRMClient.getContact(quote.billingContactId);
 
-    // 3. Extraer y validar teléfono desde la CUENTA (ACCOUNT)
-    // El usuario especificó que el teléfono debe venir del campo "Phone" de la Account
-    const phoneValidation = this.extractAndValidatePhone(account);
+    // 3. Extraer y validar teléfono desde el CONTACTO
+    const phoneValidation = this.extractAndValidatePhone(contact);
 
     if (!phoneValidation.isValid) {
-      throw new Error(`Account "${account.name}" no tiene un teléfono válido: ${phoneValidation.error}`);
+      throw new Error(`Billing Contact "${contact.name}" no tiene un teléfono válido: ${phoneValidation.error}`);
     }
 
-    console.log(`📞 Teléfono válido (desde Account): ${phoneValidation.formattedNumber}`);
+    console.log(`📞 Teléfono válido (desde Billing Contact): ${phoneValidation.formattedNumber}`);
 
     // 4. Obtener nombre del cliente
-    const clientName = account.name;
-    console.log(`👤 Cliente final: ${clientName}`);
+    // Preferimos el nombre del contacto, si no cuenta
+    const clientName = contact.name || contact.firstName || 'Cliente';
+    console.log(`👤 Cliente: ${clientName}`);
+
+    // Llamar a función auxiliar para continuar (ya que cambié el flujo)
+    await this.performQuoteFollowUp(quote, phoneValidation.formattedNumber!, clientName);
+  }
+
+  // Nueva función auxiliar para completar el envío después de obtener los datos
+  private async performQuoteFollowUp(quote: EspoCRMQuote, phone: string, clientName: string): Promise<void> {
 
     // --- LOGICA DE FECHAS (NUEVA) ---
     const datePresentedStr = quote.datePresented;
@@ -178,33 +189,99 @@ export class QuoteFollowUpService {
     }
     // ----------------------
 
-    // --- SEGURIDAD: MODO DE PRUEBA ---
-    if (env.testPhoneNumber) {
-      const safeNumber = env.testPhoneNumber.replace(/[\s\-\(\)]/g, '');
-      const currentNumber = phoneValidation.formattedNumber!;
-      
-      const safe = safeNumber.startsWith('+') ? safeNumber : `+${safeNumber}`;
-      const current = currentNumber.startsWith('+') ? currentNumber : `+${currentNumber}`;
 
-      if (safe !== current) {
-        console.log(`🛡️ [MODO SEGURO] Saltando envío REAL. El número ${current} no coincide con el número de prueba ${safe}`);
-        // Aún así podríamos actualizar la fecha si fuera real, pero en test mode mejor no tocar nada o solo loggear
-        return;
-      }
-      console.log('🛡️ [MODO SEGURO] Número autorizado. Procediendo con el envío.');
-    }
-    // ---------------------------------
 
     // 7. Enviar mensaje de WhatsApp
     console.log('📱 Enviando mensaje de seguimiento...');
-    await sendQuoteFollowUpMessage({
-      phone: phoneValidation.formattedNumber!,
+    const twilioResponse = await sendQuoteFollowUpMessage({
+      phone: phone,
       clientName: clientName,
       quoteName: quote.name,
       pdfUrl: pdfUrl,
     });
 
-    // 8. Actualizar fecha de último envío
+    // 8. Guardar mensaje en WhatsappMessage (EspoCRM)
+    console.log('💾 Guardando mensaje de seguimiento en WhatsappMessage...');
+    try {
+      // Buscar o crear conversación
+      let conversationId: string = '';
+      
+      // USER REQUEST: verificaremos si ya existe una conversacion con el numero de telefono
+      // del receptor del mensaje en el campo 'contact' (Link) o 'name' (Phone)
+      // Como standard EspoCRM usa 'name' para el número en conversciones whatsapp, buscamos por 'name'.
+      const conversations = await this.espoCRMClient.searchEntities('WhatsappConverstion', [
+        {
+          type: 'equals',
+          attribute: 'name',
+          value: phone
+        }
+      ]);
+
+      if (conversations.length > 0) {
+        conversationId = conversations[0].id;
+        console.log(`✅ Conversación existente encontrada: ${conversationId}`);
+      } else {
+        console.log(`✨ Creando nueva conversación para ${phone}`);
+        const conversationPayload: any = {
+          name: phone, // Nombre de conversación es el teléfono
+          description: `Conversación de seguimiento de cotización`
+        };
+        
+        // USER REQUEST: si no existe, cuando se cree, el campo contact de whatsapp conversation, 
+        // debe almacenar el Name del billing contact
+        if (quote.billingContactName) {
+           // Si 'contact' es un campo de texto simple:
+           conversationPayload.contact = quote.billingContactName;
+           // Si 'contact' es un Link al Contacto (lo más probable en EspoCRM):
+           // Intentaremos setear el Link también si tenemos ID
+           if (quote.billingContactId) {
+             conversationPayload.contactId = quote.billingContactId;
+           }
+        }
+        
+        const newConv = await this.espoCRMClient.createEntity('WhatsappConverstion', conversationPayload);
+        conversationId = newConv.id;
+      }
+
+      // Crear registro de mensaje
+      const senderPhone = env.twilioWhatsappFrom.replace('whatsapp:', '');
+      const messagePayload: any = {
+        name: senderPhone, // EspoCRM suele requerir Name
+        contact: senderPhone, // USER REQUEST: Guardar número del sender en campo 'contact'
+        status: 'Sent', // FIX: Marcarlo como Enviado de una vez para evitar re-proceso 
+        type: 'Out',
+        description: twilioResponse.body || `Seguimiento de cotización: ${quote.name}`,
+        whatsappConverstionId: conversationId, // CORREGIDO: Ajustado al typo de la entidad (Converstion)
+        messageSid: twilioResponse.sid,
+        isRead: false
+      };
+
+      // Vincular con Contacto (Billing Contact) -> Usamos contactId para la Relación
+      if (quote.billingContactId) {
+        messagePayload.contactId = quote.billingContactId;
+      }
+      
+      // USER REQUEST: solo a mensajes salientes, agregar campo Quote con ID de cotizacion
+      // Asumimos campo 'quoteId' (Link) y 'quoteName' (posiblemente)
+      messagePayload.quoteId = quote.id;
+      messagePayload.quoteName = quote.name;
+
+      await this.espoCRMClient.createEntity('WhatsappMessage', messagePayload);
+
+      console.log(`✅ Mensaje guardado en WhatsappMessage con SID: ${twilioResponse.sid}`);
+
+      // Actualizar conversación con último mensaje
+      await this.espoCRMClient.updateEntity('WhatsappConverstion', conversationId, {
+        description: `Seguimiento de cotización: ${quote.name}`,
+        fechaHoraUltimoMensaje: new Date().toISOString().slice(0, 19).replace('T', ' '),
+      });
+
+    } catch (error: any) {
+      console.error('❌ Error guardando mensaje en WhatsappMessage:', error.message);
+      // No lanzar error - el mensaje ya se envió exitosamente
+    }
+
+    // 9. Actualizar fecha de último envío
     const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
     console.log(`📝 Actualizando 'cotizacinEnviadaPorWhatsapp' a: ${today}`);
     

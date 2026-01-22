@@ -27,7 +27,7 @@ export const startQuoteFollowUpJob = () => {
       console.error(error.stack);
     }
   }, {
-    timezone: 'America/Santo_Domingo' // Ajusta según tu zona horaria
+    timezone: 'America/Mexico_City' // Ajusta según tu zona horaria
   });
 
   console.log('✅ Job de seguimiento de Quotes configurado (se ejecutará diariamente a las 09:00 AM)');

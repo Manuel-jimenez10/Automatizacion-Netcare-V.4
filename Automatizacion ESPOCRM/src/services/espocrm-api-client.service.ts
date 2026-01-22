@@ -24,7 +24,7 @@ export class EspoCRMClient {
     try {
       // Asegurar que no haya doble slash //
       const cleanEndpoint = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
-      const dbgUrl = `api/v1/${cleanEndpoint}`; // Removed leading slash so axios joins correctly with baseURL
+      const dbgUrl = `/api/v1/${cleanEndpoint}`; // Leading slash ensures proper URL joining
       console.log(`📡 Requesting: ${method} ${this.client.defaults.baseURL}${dbgUrl}`);
       
       const response = await this.client.request({
@@ -177,6 +177,19 @@ export class EspoCRMClient {
     }
   }
 
+  // Crear una nueva entidad
+  async createEntity(entityType: string, data: any): Promise<any> {
+    try {
+      console.log(`✨ Creando ${entityType} con datos:`, data);
+      const response = await this.request('POST', entityType, data);
+      console.log(`✅ ${entityType} creado exitosamente. ID: ${response.id}`);
+      return response;
+    } catch (error: any) {
+      console.error(`Error al crear ${entityType}:`, error.message);
+      throw new Error(`Error al crear ${entityType}: ${error.message}`);
+    }
+  }
+
   // Actualizar una entidad
   async updateEntity(entityType: string, entityId: string, data: any): Promise<void> {
     try {
@@ -189,17 +202,41 @@ export class EspoCRMClient {
     }
   }
 
+  // Vincular entidades (Relationship Link)
+  // POST /api/v1/{Entity}/{id}/link/{linkName}/{remoteId}
+  async linkEntity(entityType: string, entityId: string, linkName: string, remoteId: string): Promise<boolean> {
+    try {
+      console.log(`🔗 Vinculando ${entityType} ${entityId} con ${linkName} ${remoteId}`);
+      await this.request('POST', `${entityType}/${entityId}/link/${linkName}/${remoteId}`);
+      console.log('✅ Vinculación exitosa');
+      return true;
+    } catch (error: any) {
+      // 409 Conflict significa que ya están vinculados, lo cual es fine
+      if (error.response?.status === 409) {
+        console.log('⚠️ Ya estaban vinculados (409 Conflict)');
+        return true;
+      }
+      console.error('❌ Error al vincular entidades:', error.message);
+      // No lanzamos error para no romper el flujo principal
+      return false;
+    }
+  }
+
   // Obtener archivo (stream)
   async getFile(fileId: string): Promise<any> {
     try {
       console.log(`📂 Obteniendo archivo con ID: ${fileId} usando EntryPoint`);
       
-      // Construir URL completa porque entryPoint está en la raíz, no en /api/v1/
-      // La baseURL actual es ".../api/v1/", así que necesitamos "salir" de ahí o usar una nueva instancia
-      // O simplemente usar axios con la URL absoluta base
+      // EspoCRM usa ?entryPoint=download en la raíz, no /api/v1/
+      // Construir URL base sin /api/v1
+      let baseUrl = env.espocrmBaseUrl;
       
-      // Limpiar baseURL para quitar /api/v1 si existe
-      const baseUrl = env.espocrmBaseUrl.replace(/\/api\/v1\/?$/, '');
+      // Quitar /api/v1 si existe
+      baseUrl = baseUrl.replace(/\/api\/v1\/?$/, '');
+      
+      // Asegurar que NO termine en /
+      baseUrl = baseUrl.replace(/\/$/, '');
+      
       const downloadUrl = `${baseUrl}/?entryPoint=download&id=${fileId}`;
       
       console.log(`📡 Descargando desde: ${downloadUrl}`);
@@ -209,9 +246,10 @@ export class EspoCRMClient {
         url: downloadUrl,
         responseType: 'stream',
         headers: {
-          'X-Api-Key': env.espocrmApiKey, // Se envía la API Key también al entryPoint
+          'X-Api-Key': env.espocrmApiKey,
         }
       });
+      
       return response;
     } catch (error: any) {
       console.error(`Error al obtener archivo ${fileId}:`, error.message);

@@ -1,57 +1,57 @@
 import { Request, Response } from 'express';
-import { sendTaskCompletedMessage } from '../services/twilio.service';
+import { sendTextMessage } from '../services/twilio.service';
+import { env } from '../config/env';
 
-/**
- * RUTA DE PRUEBA - Solo para testing
- * Envía un WhatsApp con datos hardcodeados sin tocar EspoCRM
- */
-export const testWhatsApp = async (req: Request, res: Response) => {
+export const testWhatsApp = async (_req: Request, res: Response) => {
   try {
-    console.log('\n🧪 ============================================');
-    console.log('🧪 PRUEBA: Enviando WhatsApp con datos hardcodeados');
-    console.log('🧪 ============================================\n');
-
-    // Datos hardcodeados para la prueba
-    // IMPORTANTE: Cambia este número por tu número de WhatsApp personal para recibir la prueba
-    const testPhone = '+584121292194'; // 👈 CAMBIA ESTE NÚMERO
-    const testClientName = 'Juan Pérez (PRUEBA)';
-    const testTaskName = 'Revisión de documentos fiscales (PRUEBA)';
-
-    console.log('📱 Número de prueba:', testPhone);
-    console.log('👤 Cliente de prueba:', testClientName);
-    console.log('📋 Task de prueba:', testTaskName);
-    console.log('');
-
-    // Enviar el mensaje de WhatsApp
-    await sendTaskCompletedMessage({
+    const testPhone = env.testPhoneNumber || '+584121292194';
+    
+    console.log('🧪 [TEST] Llamando sendTextMessage...');
+    console.log('🧪 [TEST] Phone:', testPhone);
+    console.log('🧪 [TEST] StatusCallback será:', undefined);
+    
+    await sendTextMessage({
       phone: testPhone,
-      clientName: testClientName,
-      taskName: testTaskName,
+      text: '🧪 Este es un mensaje de PRUEBA sin template. Si lo ves, significa que Twilio funciona correctamente.',
     });
 
-    console.log('\n✅ ============================================');
-    console.log('✅ PRUEBA EXITOSA: WhatsApp enviado');
-    console.log('✅ ============================================\n');
-
-    return res.status(200).json({
-      success: true,
-      message: 'WhatsApp de prueba enviado exitosamente',
-      data: {
-        phone: testPhone,
-        clientName: testClientName,
-        taskName: testTaskName,
-      },
+    res.json({ 
+      success: true, 
+      message: `Mensaje de prueba enviado a ${testPhone}. Revisa tu WhatsApp.`,
+      note: 'Este mensaje NO usa templates, solo texto plano. Si llega, el problema es específico del template de cotizaciones.'
     });
-
   } catch (error: any) {
-    console.error('\n❌ ============================================');
-    console.error('❌ ERROR EN PRUEBA:', error.message);
-    console.error('❌ ============================================\n');
+    console.error('🧪 [TEST] Error completo:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
 
-    return res.status(500).json({
-      error: 'Test Failed',
-      message: error.message,
-      details: error.code || 'No error code available',
+export const testTemplateMessage = async (_req: Request, res: Response) => {
+  try {
+    const testPhone = env.testPhoneNumber || '+584121292194';
+    const { sendQuoteFollowUpMessage } = await import('../services/twilio.service');
+    
+    await sendQuoteFollowUpMessage({
+      phone: testPhone,
+      clientName: 'Usuario de Prueba',
+      quoteName: 'Cotización de Diagnóstico',
+      pdfUrl: undefined, // Sin PDF para esta prueba
+    });
+
+    res.json({ 
+      success: true, 
+      message: `Mensaje CON template enviado a ${testPhone}. Revisa tu WhatsApp Y los logs de Twilio.`,
+      instructions: `
+      IMPORTANTE: Verifica en Twilio Console:
+      1. Que el template ${env.twilioQuoteTemplateSid} esté APROBADO
+      2. Que el template esté asociado al sender ${env.twilioWhatsappFrom}
+      3. Busca el SID del mensaje en Messaging > Logs
+      `
+    });
+  } catch (error: any) {
+    res.status(500).json({ 
+      error: error.message,
+      hint: 'Si el error menciona "template" o "content", verifica que el template esté aprobado en Twilio para tu número de producción.'
     });
   }
 };

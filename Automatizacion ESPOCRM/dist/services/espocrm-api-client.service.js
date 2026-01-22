@@ -32,7 +32,7 @@ class EspoCRMClient {
             try {
                 // Asegurar que no haya doble slash //
                 const cleanEndpoint = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
-                const dbgUrl = `api/v1/${cleanEndpoint}`; // Removed leading slash so axios joins correctly with baseURL
+                const dbgUrl = `/api/v1/${cleanEndpoint}`; // Leading slash ensures proper URL joining
                 console.log(`📡 Requesting: ${method} ${this.client.defaults.baseURL}${dbgUrl}`);
                 const response = yield this.client.request({
                     method,
@@ -105,19 +105,49 @@ class EspoCRMClient {
         });
     }
     // Método para buscar entidades con filtros
+    // Método para buscar entidades con filtros
     searchEntities(entityType, where) {
         return __awaiter(this, void 0, void 0, function* () {
             try {
-                console.log(`🔍 Buscando ${entityType} con filtros:`, JSON.stringify(where));
+                console.log(`🔍 Buscando ${entityType} con filtros (JSON):`, JSON.stringify(where));
                 const params = {
-                    maxSize: 200, // Límite de resultados
-                    sortBy: 'createdAt', // Ordenar por fecha de creación
-                    asc: false, // Descendente (más recientes primero)
+                    maxSize: 200,
+                    sortBy: 'createdAt',
+                    asc: false,
                 };
+                // Construcción manual del query string para manejar arrays al estilo PHP/EspoCRM
+                // EspoCRM espera format: where[0][type]=equals&where[0][attribute]=status...
+                const queryParams = [];
+                // 1. Añadir parámetros simples
+                Object.keys(params).forEach(key => {
+                    queryParams.push(`${key}=${params[key]}`);
+                });
+                // 2. Serializar filtro 'where' recursivamente
                 if (where) {
-                    params.where = where;
+                    const buildParams = (prefix, value) => {
+                        if (Array.isArray(value)) {
+                            value.forEach((v, i) => buildParams(`${prefix}[${i}]`, v));
+                        }
+                        else if (typeof value === 'object' && value !== null) {
+                            Object.keys(value).forEach(k => buildParams(`${prefix}[${k}]`, value[k]));
+                        }
+                        else {
+                            queryParams.push(`${prefix}=${encodeURIComponent(value)}`);
+                        }
+                    };
+                    buildParams('where', where);
                 }
-                const response = yield this.request('GET', `${entityType}?${new URLSearchParams(Object.assign(Object.assign({}, params), { where: JSON.stringify(params.where || []) }))}`);
+                const queryString = queryParams.join('&');
+                // No usamos URLSearchParams porque codifica los corchetes [] y EspoCRM a veces prefiere raw o específico
+                // Pero axios normalmente codifica. Probemos construyendo la URL nosotros.
+                // NOTA: axios.get(url) codificará la URL si tiene caracteres especiales.
+                // queryParams ya tiene los valores codificados con encodeURIComponent arriba.
+                // Los corchetes [ ] en las keys NO deben ser codificados para que PHP los lea nativamente como arrays,
+                // AUNQUE el estándar dice que deberían. Muchos servidores PHP los aceptan sin codificar o decodifican.
+                // Vamos a probar enviando la string construida.
+                const fullEndpoint = `${entityType}?${queryString}`;
+                console.log(`📡 URL Generada (Check params): ${fullEndpoint}`);
+                const response = yield this.request('GET', fullEndpoint);
                 const list = response.list || [];
                 console.log(`✅ Encontrados ${list.length} ${entityType}(s)`);
                 return list;
@@ -164,6 +194,21 @@ class EspoCRMClient {
             }
         });
     }
+    // Crear una nueva entidad
+    createEntity(entityType, data) {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                console.log(`✨ Creando ${entityType} con datos:`, data);
+                const response = yield this.request('POST', entityType, data);
+                console.log(`✅ ${entityType} creado exitosamente. ID: ${response.id}`);
+                return response;
+            }
+            catch (error) {
+                console.error(`Error al crear ${entityType}:`, error.message);
+                throw new Error(`Error al crear ${entityType}: ${error.message}`);
+            }
+        });
+    }
     // Actualizar una entidad
     updateEntity(entityType, entityId, data) {
         return __awaiter(this, void 0, void 0, function* () {
@@ -175,6 +220,59 @@ class EspoCRMClient {
             catch (error) {
                 console.error(`Error al actualizar ${entityType}:`, error.message);
                 throw new Error(`Error al actualizar ${entityType}: ${error.message}`);
+            }
+        });
+    }
+    // Vincular entidades (Relationship Link)
+    // POST /api/v1/{Entity}/{id}/link/{linkName}/{remoteId}
+    linkEntity(entityType, entityId, linkName, remoteId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            var _a;
+            try {
+                console.log(`🔗 Vinculando ${entityType} ${entityId} con ${linkName} ${remoteId}`);
+                yield this.request('POST', `${entityType}/${entityId}/link/${linkName}/${remoteId}`);
+                console.log('✅ Vinculación exitosa');
+                return true;
+            }
+            catch (error) {
+                // 409 Conflict significa que ya están vinculados, lo cual es fine
+                if (((_a = error.response) === null || _a === void 0 ? void 0 : _a.status) === 409) {
+                    console.log('⚠️ Ya estaban vinculados (409 Conflict)');
+                    return true;
+                }
+                console.error('❌ Error al vincular entidades:', error.message);
+                // No lanzamos error para no romper el flujo principal
+                return false;
+            }
+        });
+    }
+    // Obtener archivo (stream)
+    getFile(fileId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                console.log(`📂 Obteniendo archivo con ID: ${fileId} usando EntryPoint`);
+                // EspoCRM usa ?entryPoint=download en la raíz, no /api/v1/
+                // Construir URL base sin /api/v1
+                let baseUrl = env_1.env.espocrmBaseUrl;
+                // Quitar /api/v1 si existe
+                baseUrl = baseUrl.replace(/\/api\/v1\/?$/, '');
+                // Asegurar que NO termine en /
+                baseUrl = baseUrl.replace(/\/$/, '');
+                const downloadUrl = `${baseUrl}/?entryPoint=download&id=${fileId}`;
+                console.log(`📡 Descargando desde: ${downloadUrl}`);
+                const response = yield (0, axios_1.default)({
+                    method: 'GET',
+                    url: downloadUrl,
+                    responseType: 'stream',
+                    headers: {
+                        'X-Api-Key': env_1.env.espocrmApiKey,
+                    }
+                });
+                return response;
+            }
+            catch (error) {
+                console.error(`Error al obtener archivo ${fileId}:`, error.message);
+                throw new Error(`Error al obtener archivo: ${error.message}`);
             }
         });
     }
