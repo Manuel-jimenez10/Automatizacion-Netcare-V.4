@@ -12,7 +12,16 @@ import { QuoteFollowUpService } from '../services/quote-followup.service';
  * - Mes: * (cualquier mes)
  * - Día de la semana: * (cualquier día)
  */
+let started = false;
+
 export const startQuoteFollowUpJob = () => {
+  // Patrón Singleton para evitar múltiples inits si Passenger hace spawn
+  if (started) {
+    console.log('⚠️ Job de seguimiento ya iniciado. Ignorando llamada.');
+    return;
+  }
+  started = true;
+
   console.log('🔧 Configurando job de seguimiento de Quotes...');
   
   // Ejecutar todos los días a las 09:00 AM

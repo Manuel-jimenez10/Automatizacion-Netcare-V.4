@@ -1,13 +1,4 @@
 "use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TaskCompletionService = void 0;
 const espocrm_api_client_service_1 = require("./espocrm-api-client.service");
@@ -20,55 +11,53 @@ class TaskCompletionService {
      * Maneja el evento de completación de una Task
      * Orquesta todo el flujo: Task → Contact → WhatsApp
      */
-    handleTaskCompletion(taskId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            console.log('\n🚀 ============================================');
-            console.log(`🚀 Iniciando proceso de Task completada: ${taskId}`);
-            console.log('🚀 ============================================\n');
-            try {
-                // 1. Obtener la Task desde EspoCRM
-                const task = yield this.espoCRMClient.getTask(taskId);
-                // 2. Validar que la Task esté completada
-                if (task.status !== 'Completed') {
-                    console.log(`⚠️  Task no está completada. Estado actual: ${task.status}`);
-                    throw new Error(`La Task no está en estado Completed (estado actual: ${task.status})`);
-                }
-                console.log(`✅ Task "${task.name}" confirmada como Completed`);
-                // 3. Validar que existe una relación padre
-                if (!task.parentType || !task.parentId) {
-                    console.log('❌ La Task no tiene una relación padre (parentType/parentId)');
-                    throw new Error('La Task no tiene una relación padre asociada');
-                }
-                console.log(`🔗 Relación encontrada: ${task.parentType} (ID: ${task.parentId})`);
-                // 4. Obtener la entidad padre (normalmente un Contact)
-                const parentEntity = yield this.espoCRMClient.getEntity(task.parentType, task.parentId);
-                // 5. Extraer el número de teléfono
-                const phoneValidation = this.extractAndValidatePhone(parentEntity);
-                if (!phoneValidation.isValid) {
-                    console.log(`❌ ${phoneValidation.error}`);
-                    throw new Error(phoneValidation.error);
-                }
-                console.log(`📞 Teléfono válido encontrado: ${phoneValidation.formattedNumber}`);
-                // 6. Obtener el nombre del cliente
-                const clientName = this.getClientName(parentEntity);
-                console.log(`👤 Nombre del cliente: ${clientName}`);
-                // 7. Enviar mensaje de WhatsApp
-                yield (0, twilio_service_1.sendTaskCompletedMessage)({
-                    phone: phoneValidation.formattedNumber,
-                    clientName: clientName,
-                    taskName: task.name,
-                });
-                console.log('\n✅ ============================================');
-                console.log('✅ Proceso completado exitosamente');
-                console.log('✅ ============================================\n');
+    async handleTaskCompletion(taskId) {
+        console.log('\n🚀 ============================================');
+        console.log(`🚀 Iniciando proceso de Task completada: ${taskId}`);
+        console.log('🚀 ============================================\n');
+        try {
+            // 1. Obtener la Task desde EspoCRM
+            const task = await this.espoCRMClient.getTask(taskId);
+            // 2. Validar que la Task esté completada
+            if (task.status !== 'Completed') {
+                console.log(`⚠️  Task no está completada. Estado actual: ${task.status}`);
+                throw new Error(`La Task no está en estado Completed (estado actual: ${task.status})`);
             }
-            catch (error) {
-                console.log('\n❌ ============================================');
-                console.log(`❌ Error en el proceso: ${error.message}`);
-                console.log('❌ ============================================\n');
-                throw error;
+            console.log(`✅ Task "${task.name}" confirmada como Completed`);
+            // 3. Validar que existe una relación padre
+            if (!task.parentType || !task.parentId) {
+                console.log('❌ La Task no tiene una relación padre (parentType/parentId)');
+                throw new Error('La Task no tiene una relación padre asociada');
             }
-        });
+            console.log(`🔗 Relación encontrada: ${task.parentType} (ID: ${task.parentId})`);
+            // 4. Obtener la entidad padre (normalmente un Contact)
+            const parentEntity = await this.espoCRMClient.getEntity(task.parentType, task.parentId);
+            // 5. Extraer el número de teléfono
+            const phoneValidation = this.extractAndValidatePhone(parentEntity);
+            if (!phoneValidation.isValid) {
+                console.log(`❌ ${phoneValidation.error}`);
+                throw new Error(phoneValidation.error);
+            }
+            console.log(`📞 Teléfono válido encontrado: ${phoneValidation.formattedNumber}`);
+            // 6. Obtener el nombre del cliente
+            const clientName = this.getClientName(parentEntity);
+            console.log(`👤 Nombre del cliente: ${clientName}`);
+            // 7. Enviar mensaje de WhatsApp
+            await (0, twilio_service_1.sendTaskCompletedMessage)({
+                phone: phoneValidation.formattedNumber,
+                clientName: clientName,
+                taskName: task.name,
+            });
+            console.log('\n✅ ============================================');
+            console.log('✅ Proceso completado exitosamente');
+            console.log('✅ ============================================\n');
+        }
+        catch (error) {
+            console.log('\n❌ ============================================');
+            console.log(`❌ Error en el proceso: ${error.message}`);
+            console.log('❌ ============================================\n');
+            throw error;
+        }
     }
     /**
      * Extrae y valida el número de teléfono de una entidad

@@ -1,12 +1,17 @@
-<IfModule (fedora|rhel|centos|cloudlinux)_passenger_module>
-    PassengerAppRoot "/home/nc/api-express-espocrm"
-    PassengerBaseURI "/api-express"
+<IfModule passenger_module>
+    PassengerAppRoot /home/nc/api-express-espocrm
     PassengerAppType node
-    PassengerStartupFile server.js
+    PassengerStartupFile dist/passenger.js
+    PassengerNodejs /opt/cpanel/ea-nodejs20/bin/node
+    PassengerAppEnv production
 </IfModule>
 
-RewriteEngine On
-RewriteRule ^$ http://127.0.0.1:3000/ [P,L]
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule ^(.*)$ http://127.0.0.1:3000/$1 [P,L]
+# Evita que Apache intente negociar archivos y rompa rutas de Node
+Options -MultiViews
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # Todas las solicitudes van directamente a Node
+    RewriteRule ^ - [L]
+</IfModule>

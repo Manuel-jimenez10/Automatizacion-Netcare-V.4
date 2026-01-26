@@ -1,12 +1,14 @@
+import 'dotenv/config';
 import app from './app';
-import './config/env';
 import { startQuoteFollowUpJob } from './jobs/quote-followup.job';
 
 const PORT = process.env.PORT || 3000;
 
+// Este archivo es SOLO para ejecución local o VPS tradicional
+// Passenger NO usa este archivo.
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   
-  // Iniciar cron job de seguimiento de Quotes
+  // Iniciar Cron Jobs
   startQuoteFollowUpJob();
 });

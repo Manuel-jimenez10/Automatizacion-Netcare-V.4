@@ -32,26 +32,17 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.testTemplateMessage = exports.testWhatsApp = void 0;
 const twilio_service_1 = require("../services/twilio.service");
 const env_1 = require("../config/env");
-const testWhatsApp = (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+const testWhatsApp = async (_req, res) => {
     try {
         const testPhone = env_1.env.testPhoneNumber || '+584121292194';
         console.log('🧪 [TEST] Llamando sendTextMessage...');
         console.log('🧪 [TEST] Phone:', testPhone);
         console.log('🧪 [TEST] StatusCallback será:', undefined);
-        yield (0, twilio_service_1.sendTextMessage)({
+        await (0, twilio_service_1.sendTextMessage)({
             phone: testPhone,
             text: '🧪 Este es un mensaje de PRUEBA sin template. Si lo ves, significa que Twilio funciona correctamente.',
         });
@@ -65,13 +56,13 @@ const testWhatsApp = (_req, res) => __awaiter(void 0, void 0, void 0, function* 
         console.error('🧪 [TEST] Error completo:', error);
         res.status(500).json({ error: error.message });
     }
-});
+};
 exports.testWhatsApp = testWhatsApp;
-const testTemplateMessage = (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+const testTemplateMessage = async (_req, res) => {
     try {
         const testPhone = env_1.env.testPhoneNumber || '+584121292194';
-        const { sendQuoteFollowUpMessage } = yield Promise.resolve().then(() => __importStar(require('../services/twilio.service')));
-        yield sendQuoteFollowUpMessage({
+        const { sendQuoteFollowUpMessage } = await Promise.resolve().then(() => __importStar(require('../services/twilio.service')));
+        await sendQuoteFollowUpMessage({
             phone: testPhone,
             clientName: 'Usuario de Prueba',
             quoteName: 'Cotización de Diagnóstico',
@@ -94,5 +85,5 @@ const testTemplateMessage = (_req, res) => __awaiter(void 0, void 0, void 0, fun
             hint: 'Si el error menciona "template" o "content", verifica que el template esté aprobado en Twilio para tu número de producción.'
         });
     }
-});
+};
 exports.testTemplateMessage = testTemplateMessage;
