@@ -11,6 +11,15 @@ app.set('trust proxy', 1);
 // Middlewares
 app.use(express_1.default.json());
 app.use(express_1.default.urlencoded({ extended: true }));
+// 🔍 DEBUG: Log global para diagnosticar TODAS las requests entrantes
+app.use((req, res, next) => {
+    console.log(`\n📥 [${new Date().toISOString()}] ${req.method} ${req.url}`);
+    console.log(`   Headers: Content-Type=${req.headers['content-type']}, User-Agent=${req.headers['user-agent']?.substring(0, 50)}`);
+    if (req.method === 'POST' && Object.keys(req.body).length > 0) {
+        console.log(`   Body Keys: ${Object.keys(req.body).join(', ')}`);
+    }
+    next();
+});
 // Health check
 app.get('/', (_req, res) => {
     res.send('API running');
