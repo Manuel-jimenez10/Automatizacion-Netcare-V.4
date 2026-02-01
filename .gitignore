@@ -1,0 +1,34 @@
+# Env
+.env
+.env.*
+
+# Node
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+debug.log
+
+# Build
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Uploads temporales
+uploads/
+
+# Archivos personales (por tu caso en Desktop)
+*.exe
+*.lnk
+*.pdf
+*.rar
+*.zip
+*.7z

@@ -17,7 +17,9 @@ export const env = {
   // Nombres de campos en EspoCRM (CONFIRMADOS)
   fieldCotizacionPropuesta: 'cotizacinPropuesta', // Archivo PDF de la cotización
   fieldCotizacionEnviadaWhatsapp: 'cotizacinEnviadaPorWhatsapp', // Fecha de envío por WhatsApp
-  twilioStatusCallbackUrl: process.env.TWILIO_STATUS_CALLBACK_URL
+  twilioStatusCallbackUrl: process.env.TWILIO_STATUS_CALLBACK_URL,
+  storageUploadUrl: 'https://nc.salesontop.com/upload.php', // URL corregida
+  storageToken: process.env.STORAGE_TOKEN || '', // Token opcional para seguridad
 };
 
 

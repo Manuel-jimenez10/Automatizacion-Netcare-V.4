@@ -55,10 +55,15 @@ export class WhatsappController {
   // Handle Incoming Message (Twilio Webhook)
   static async handleIncomingMessage(req: Request, res: Response) {
     try {
-      const { From, Body, MessageSid } = req.body;
-      console.log('📨 Mensaje Entrante Twilio:', { From, Body, MessageSid });
+      const { From, Body, MessageSid, NumMedia } = req.body;
+      console.log('📨 Mensaje Entrante Twilio:', { From, Body, MessageSid, NumMedia });
 
-      if (!From || !Body) {
+      const { MediaService } = await import('../services/media.service'); // Dynamic import or top level
+
+
+      // Permitimos Body vacío si hay adjuntos (NumMedia > 0)
+      const hasMedia = parseInt(NumMedia || '0') > 0;
+      if (!From || (!Body && !hasMedia)) {
          res.status(400).send('Missing From or Body');
          return;
       }
@@ -128,7 +133,7 @@ export class WhatsappController {
         name: phone,
         status: 'Delivered', 
         type: 'In',
-        description: Body, 
+        description: Body || (hasMedia ? '📎 [Archivo Adjunto]' : ''), 
         messageSid: MessageSid, 
         isRead: false
       };
@@ -158,6 +163,54 @@ export class WhatsappController {
             description: Body, 
             fechaHoraUltimoMensaje: new Date().toISOString().slice(0, 19).replace('T', ' '),
           });
+      }
+
+      // 4. Procesar Media (Si existe)
+      const numMedia = parseInt(NumMedia || '0', 10);
+      if (numMedia > 0) {
+        console.log(`📎 Procesando ${numMedia} archivos adjuntos...`);
+        
+        // Procesar asincronamente para no bloquear respuesta ??? 
+        // Twilio espera < 15s. Si son archivos grandes, mejor responder y procesar en background o usar Promise.all
+        // Vamos a intentar Promise.all pero sin awaitar TODO si queremos responder rápido? 
+        // El usuario pidió "registro en base de datos". Si falla, deberíamos saberlo.
+        // Haremos await por simplicidad y robustez inicial, a menos que sean videos gigantes.
+        
+        const mediaPromises = [];
+        for (let i = 0; i < numMedia; i++) {
+          const mediaUrl = req.body[`MediaUrl${i}`];
+          const mediaContentType = req.body[`MediaContentType${i}`];
+          
+          if (mediaUrl) {
+            mediaPromises.push((async () => {
+              try {
+                console.log(`   > Procesando media #${i}: ${mediaContentType}`);
+                const uploadedData = await MediaService.processMediaItem(mediaUrl, mediaContentType);
+                
+                // Crear entidad WhatsappMedia en EspoCRM
+                const mediaData = {
+                  name: uploadedData.url, // User requested full URL as the name/identifier
+                  fileName: uploadedData.fileName,
+                  url: uploadedData.url,
+                  mimeType: uploadedData.mimeType,
+                  category: uploadedData.category,
+                  size: uploadedData.size,
+                  messageId: newMessage.id, // Id del mensaje creado arriba
+                  whatsappMessageId: newMessage.id, // Alternativa por si la relación usa este nombre
+                };
+
+                await espoClient.createEntity('WhatsappMedia', mediaData);
+                console.log(`   ✅ Media registrada en EspoCRM: ${uploadedData.fileName}`);
+                
+              } catch (err: any) {
+                console.error(`   ❌ Error procesando media #${i}:`, err.message);
+              }
+            })());
+          }
+        }
+
+        // Esperamos a que terminen para asegurar consistencia
+        await Promise.all(mediaPromises);
       }
 
       res.status(200).send('<Response></Response>'); // Twilio expects XML or empty
