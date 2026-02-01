@@ -56,14 +56,17 @@ export class WhatsappController {
   static async handleIncomingMessage(req: Request, res: Response) {
     try {
       const { From, Body, MessageSid, NumMedia } = req.body;
-      console.log('📨 Mensaje Entrante Twilio:', { From, Body, MessageSid, NumMedia });
+      console.log('📨 Mensaje Entrante Twilio (Payload Completo):', JSON.stringify(req.body, null, 2));
 
       const { MediaService } = await import('../services/media.service'); // Dynamic import or top level
 
 
       // Permitimos Body vacío si hay adjuntos (NumMedia > 0)
       const hasMedia = parseInt(NumMedia || '0') > 0;
+      console.log(`🔍 Validación: HasMedia=${hasMedia}, Body="${Body}", NumMediaRaw="${NumMedia}"`);
+      
       if (!From || (!Body && !hasMedia)) {
+         console.warn('❌ Rechazado por validación (Falta Body y no hay Media)');
          res.status(400).send('Missing From or Body');
          return;
       }
@@ -168,7 +171,7 @@ export class WhatsappController {
       // 4. Procesar Media (Si existe)
       const numMedia = parseInt(NumMedia || '0', 10);
       if (numMedia > 0) {
-        console.log(`📎 Procesando ${numMedia} archivos adjuntos...`);
+        console.log(`📎 Procesando ${numMedia} archivos adjuntos (Entrando al bloque)...`);
         
         // Procesar asincronamente para no bloquear respuesta ??? 
         // Twilio espera < 15s. Si son archivos grandes, mejor responder y procesar en background o usar Promise.all
