@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import { EspoCRMClient } from '../services/espocrm-api-client.service';
 import { sendTextMessage } from '../services/twilio.service';
 import { env } from '../config/env';
@@ -73,6 +74,49 @@ export class WhatsappController {
 
       // Cleanup Phone (Twilio sends whatsapp:+123456)
       const phone = From.replace('whatsapp:', '');
+
+      // 0. Notificación Instantánea al Admin (Fire & Forget - Template)
+      const adminPhone = env.adminNotificationPhone;
+      
+      if (adminPhone) {
+        // Ejecutar en segundo plano para no bloquear respuesta a Twilio
+        (async () => {
+          try {
+            const { sendNotificationTemplate, sendTextMessage } = await import('../services/twilio.service');
+            let sentMessage: any;
+
+            if (env.notificationTemplateSid) {
+              sentMessage = await sendNotificationTemplate({
+                phone: adminPhone,
+                adminName: phone, 
+                messageContent: Body || (hasMedia ? '[Archivo Adjunto]' : 'Mensaje vacío'), 
+                statusCallback: env.twilioStatusCallbackUrl
+              });
+            } else {
+              sentMessage = await sendTextMessage({
+                 phone: adminPhone,
+                 text: `🔔 Nuevo mensaje de ${phone}: ${Body || (hasMedia ? '[Archivo Adjunto]' : '')}`,
+                 statusCallback: env.twilioStatusCallbackUrl
+              });
+            }
+
+            // Guardar notificación en EspoCRM para evitar errores "Message not found" en status callback
+            if (sentMessage && sentMessage.sid) {
+               await espoClient.createEntity('WhatsappMessage', {
+                 name: adminPhone,
+                 status: 'Sent',
+                 type: 'Out',
+                 description: `🔔 Notificación: Nuevo mensaje de ${phone}`,
+                 messageSid: sentMessage.sid,
+                 // No vinculamos a conversación del cliente para mantener privacidad/orden
+               }).catch(e => console.error('⚠️ Error guardando notificación admin en Espo:', e.message));
+            }
+
+          } catch (err: any) {
+            console.error('❌ Error enviando notificación admin:', err.message);
+          }
+        })();
+      }
 
       // 1. Buscar o Crear Conversación
       // Asumimos que podemos buscar por nombre (teléfono) o tenemos un campo phone
@@ -168,52 +212,65 @@ export class WhatsappController {
           });
       }
 
-      // 4. Procesar Media (Si existe)
+      // 4. Procesar Media (Nativo EspoCRM Attachments)
       const numMedia = parseInt(NumMedia || '0', 10);
       if (numMedia > 0) {
-        console.log(`📎 Procesando ${numMedia} archivos adjuntos (Entrando al bloque)...`);
+        console.log(`📎 Procesando ${numMedia} archivos adjuntos (Modo Nativo Setup)...`);
         
-        // Procesar asincronamente para no bloquear respuesta ??? 
-        // Twilio espera < 15s. Si son archivos grandes, mejor responder y procesar en background o usar Promise.all
-        // Vamos a intentar Promise.all pero sin awaitar TODO si queremos responder rápido? 
-        // El usuario pidió "registro en base de datos". Si falla, deberíamos saberlo.
-        // Haremos await por simplicidad y robustez inicial, a menos que sean videos gigantes.
-        
-        const mediaPromises = [];
+        let firstAttachmentId: string | null = null;
+
         for (let i = 0; i < numMedia; i++) {
           const mediaUrl = req.body[`MediaUrl${i}`];
           const mediaContentType = req.body[`MediaContentType${i}`];
           
           if (mediaUrl) {
-            mediaPromises.push((async () => {
-              try {
-                console.log(`   > Procesando media #${i}: ${mediaContentType}`);
-                const uploadedData = await MediaService.processMediaItem(mediaUrl, mediaContentType);
-                
-                // Crear entidad WhatsappMedia en EspoCRM
-                const mediaData = {
-                  name: uploadedData.url, // User requested full URL as the name/identifier
-                  fileName: uploadedData.fileName,
-                  url: uploadedData.url,
-                  mimeType: uploadedData.mimeType,
-                  category: uploadedData.category,
-                  size: uploadedData.size,
-                  messageId: newMessage.id, // Id del mensaje creado arriba
-                  whatsappMessageId: newMessage.id, // Alternativa por si la relación usa este nombre
-                };
+            try {
+              console.log(`   > Procesando media #${i}: ${mediaContentType}`);
+              
+              // 1. Descargar de Twilio
+              const { buffer } = await MediaService.downloadMedia(mediaUrl);
+              
+              // 2. Determinar nombre archivo
+              const ext = mediaContentType.split('/')[1] || 'bin';
+              const fileName = `whatsapp_${MessageSid}_${i}.${ext}`;
 
-                await espoClient.createEntity('WhatsappMedia', mediaData);
-                console.log(`   ✅ Media registrada en EspoCRM: ${uploadedData.fileName}`);
-                
-              } catch (err: any) {
-                console.error(`   ❌ Error procesando media #${i}:`, err.message);
+              // 3. Subir como Attachment a EspoCRM linked to WhatsappMessage
+              // Enviamos parentType y parentId en la creación.
+              const attachment = await espoClient.uploadAttachment(
+                buffer, 
+                fileName, 
+                mediaContentType,
+                'WhatsappMessage', // parentType
+                newMessage.id      // parentId (ID interno EspoCRM)
+              );
+
+              console.log(`   ✅ Attachment subido. ID: ${attachment.id}`);
+
+              // Nota: No se usa linkEntity porque archivoAdjunto es un campo tipo File,
+              // no una relación Attachment-Multiple. La vinculación se hace via archivoAdjuntoId.
+
+              // Guardar el primero para vincular al campo personalizado
+              if (!firstAttachmentId) {
+                firstAttachmentId = attachment.id;
               }
-            })());
+
+            } catch (err: any) {
+              console.error(`   ❌ Error procesando media nativa #${i}:`, err.message);
+            }
           }
         }
 
-        // Esperamos a que terminen para asegurar consistencia
-        await Promise.all(mediaPromises);
+        // 4. Vincular al campo personalizado 'archivoAdjunto' si existe un adjunto
+        if (firstAttachmentId) {
+          console.log(`📝 Vinculando archivoAdjuntoId: ${firstAttachmentId} al mensaje ${newMessage.id}`);
+          try {
+            await espoClient.updateEntity('WhatsappMessage', newMessage.id, {
+              archivoAdjuntoId: firstAttachmentId
+            });
+          } catch (updateErr: any) {
+            console.error('   ⚠️ Error vinculando campo archivoAdjunto:', updateErr.message);
+          }
+        }
       }
 
       res.status(200).send('<Response></Response>'); // Twilio expects XML or empty
@@ -226,43 +283,82 @@ export class WhatsappController {
   // Handle Outgoing Message (EspoCRM Webhook)
   static async handleOutgoingMessage(req: Request, res: Response) {
     try {
-      // EspoCRM webhook payload (variable structure depending on configuration)
-      // Usually entity data is in req.body
-      const entity = req.body;
-      console.log('📤 Webhook Saliente EspoCRM:', entity.id);
+      const initialEntity = req.body;
+      console.log('📤 Webhook Saliente EspoCRM:', initialEntity.id);
 
-      if (entity.type !== 'Out') {
+      if (initialEntity.type !== 'Out') {
         console.log('ℹ️ Ignorando mensaje que no es type="Out"');
         res.status(200).send({ status: 'ignored' });
         return;
       }
 
-      // FIX: Evitar bucle infinito si el mensaje ya tiene un SID (fue creado por nuestro Job)
-      if (entity.messageSid) {
-        console.log(`ℹ️ Ignorando mensaje que ya tiene SID (enviado por Job Automático): ${entity.messageSid}`);
+      if (initialEntity.messageSid) {
+        console.log(`ℹ️ Ignorando mensaje que ya tiene SID: ${initialEntity.messageSid}`);
         res.status(200).send({ status: 'ignored', reason: 'already_sent' });
         return;
       }
 
-      // Validar datos
-      const phone = entity.name; // User said name stores phone
-      const text = entity.text || entity.description; // Fallback
+      // 1. Obtener entidad completa para asegurar acceso a campos custom (archivoAdjuntoId)
+      console.log(`🔍 Obteniendo detalles completos del mensaje ${initialEntity.id}...`);
+      const entity = await espoClient.getEntity('WhatsappMessage', initialEntity.id);
       
-      if (!phone || !text) {
-        console.error('❌ Falta teléfono o texto en la entidad');
-         res.status(400).send('Missing phone or text');
-         return;
+      const phone = entity.name; 
+      let text = entity.text || entity.description || ''; // Texto opcional si hay media
+      const attachmentId = entity.archivoAdjuntoId; // Campo custom usado por el usuario
+      // const attachmentIds = entity.attachmentsIds; // Relación nativa (opcional futuro)
+
+      console.log(`   - Phone: ${phone}`);
+      console.log(`   - Text: "${text}"`);
+      console.log(`   - Attachment ID: ${attachmentId || 'Ninguno'}`);
+
+      if (!phone) {
+        console.error('❌ Falta teléfono en la entidad');
+        res.status(400).send('Missing phone');
+        return;
       }
 
-      // Enviar por Twilio
-      const callbackUrl = env.twilioStatusCallbackUrl;
-      const message = await sendTextMessage({
-        phone,
-        text,
-        statusCallback: callbackUrl
-      });
+      if (!text && !attachmentId) {
+        console.error('❌ Falta texto y no hay adjunto');
+        res.status(400).send('Missing content (text or file)');
+        return;
+      }
 
-      // Actualizar EspoCRM con el SID para tracking
+      const callbackUrl = env.twilioStatusCallbackUrl;
+      let message;
+
+      // 2. Enviar Mensaje (Texto o Media)
+      if (attachmentId) {
+        console.log(`📎 Detectado archivo adjunto: ${attachmentId}. Enviando como Media Message...`);
+        
+        // Asumimos URL pública en data/upload
+        // Si el usuario usa un proxy o regla Rewrite, esto funciona.
+        // Si no, Twilio podría fallar si no puede acceder.
+        // Espo guarda en data/upload/ID (sin extensión). 
+        // Twilio suele requerir extensión o Content-Type correcto en headers.
+        // Si la URL directa falla, necesitaremos un proxy en este controller.
+        // UPDATE: Usamos el Proxy de Node.js para servir el archivo con headers correctos
+        const mediaUrl = `${env.publicUrl}/api/media/proxy/${attachmentId}`;
+        
+        console.log(`   🔗 Generando URL Proxy para Twilio: ${mediaUrl}`);
+        
+        const { sendMediaMessage } = await import('../services/twilio.service');
+        message = await sendMediaMessage({
+          phone,
+          body: text, // Puede ir vacío
+          mediaUrls: [mediaUrl],
+          statusCallback: callbackUrl
+        });
+
+      } else {
+        console.log(`📝 Enviando mensaje de texto puro...`);
+        message = await sendTextMessage({
+          phone,
+          text,
+          statusCallback: callbackUrl
+        });
+      }
+
+      // 3. Actualizar EspoCRM con el SID
       if (message.sid) {
         await espoClient.updateEntity('WhatsappMessage', entity.id, {
           messageSid: message.sid,
@@ -320,7 +416,9 @@ export class WhatsappController {
       res.status(500).send(error.message);
     }
   }
+
 }
+
 // Legacy function to support existing webhook.routes.ts
 export const taskCompleted = async (req: Request, res: Response) => {
   try {

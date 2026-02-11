@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendTextMessage = exports.sendQuoteFollowUpMessage = exports.sendTaskCompletedMessage = void 0;
+exports.sendNotificationTemplate = exports.sendMediaMessage = exports.sendTextMessage = exports.sendQuoteFollowUpMessage = exports.sendTaskCompletedMessage = void 0;
 const twilio_1 = __importDefault(require("twilio"));
 const env_1 = require("../config/env");
 const client = (0, twilio_1.default)(env_1.env.twilioAccountSid, env_1.env.twilioAuthToken);
@@ -174,3 +174,77 @@ const sendTextMessage = async ({ phone, text, statusCallback, }) => {
     }
 };
 exports.sendTextMessage = sendTextMessage;
+const sendMediaMessage = async ({ phone, mediaUrls, body, statusCallback, }) => {
+    if (!phone)
+        throw new Error('El número de teléfono es requerido');
+    if (!mediaUrls || mediaUrls.length === 0) {
+        throw new Error('Se requiere al menos una URL de media');
+    }
+    // Limpiar teléfono
+    const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
+    const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
+    console.log(`📱 Enviando Media WhatsApp a: ${formattedPhone}`);
+    console.log(`   - Media URLs: ${mediaUrls.join(', ')}`);
+    if (body)
+        console.log(`   - Caption: ${body}`);
+    try {
+        const messageParams = {
+            from: env_1.env.twilioWhatsappFrom,
+            to: `whatsapp:${formattedPhone}`,
+            mediaUrl: mediaUrls, // Twilio acepta array de URLs
+        };
+        if (body) {
+            messageParams.body = body;
+        }
+        if (statusCallback) {
+            messageParams.statusCallback = statusCallback;
+        }
+        const message = await client.messages.create(messageParams);
+        console.log(`✅ Mensaje con media enviado exitosamente`);
+        console.log(`   - SID: ${message.sid}`);
+        console.log(`   - Estado: ${message.status}`);
+        return message;
+    }
+    catch (error) {
+        console.error('❌ Error enviando media por WhatsApp:', error.message);
+        if (error.code) {
+            console.error(`   - Código de error Twilio: ${error.code}`);
+        }
+        throw error;
+    }
+};
+exports.sendMediaMessage = sendMediaMessage;
+const sendNotificationTemplate = async ({ phone, adminName, messageContent, statusCallback, }) => {
+    if (!phone)
+        throw new Error('El número de teléfono es requerido');
+    if (!env_1.env.notificationTemplateSid)
+        throw new Error('NOTIFICATION_TEMPLATE_SID no configurado');
+    // Limpiar teléfono
+    const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
+    const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
+    console.log(`📱 Enviando Template de Notificación a: ${formattedPhone}`);
+    try {
+        const variables = {
+            1: adminName || 'Admin',
+            2: messageContent
+        };
+        const messageParams = {
+            from: env_1.env.twilioWhatsappFrom,
+            to: `whatsapp:${formattedPhone}`,
+            contentSid: env_1.env.notificationTemplateSid,
+            contentVariables: JSON.stringify(variables),
+        };
+        if (statusCallback) {
+            messageParams.statusCallback = statusCallback;
+        }
+        const message = await client.messages.create(messageParams);
+        console.log(`✅ Notificación por Template enviada exitosamente`);
+        console.log(`   - SID: ${message.sid}`);
+        return message;
+    }
+    catch (error) {
+        console.error('❌ Error enviando notificación por Template:', error.message);
+        throw error;
+    }
+};
+exports.sendNotificationTemplate = sendNotificationTemplate;

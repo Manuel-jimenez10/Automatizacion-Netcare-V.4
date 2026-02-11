@@ -238,5 +238,68 @@ class EspoCRMClient {
             throw new Error(`Error al obtener archivo: ${error.message}`);
         }
     }
+    // Subir Adjunto (Nativo EspoCRM)
+    // POST /api/v1/Attachment
+    async uploadAttachment(buffer, fileName, mimeType, relatedType, relatedId, role = 'Attachment') {
+        const FormData = require('form-data');
+        const form = new FormData();
+        // Use Buffer directly to avoid chunked encoding and ensure known length
+        // const { Readable } = require('stream'); // Disabled for this test
+        // const stream = Readable.from(buffer); // Disabled for this test
+        // Metadata first
+        if (role)
+            form.append('role', role);
+        if (relatedType)
+            form.append('parentType', relatedType);
+        if (relatedId)
+            form.append('parentId', relatedId);
+        // Append file as Buffer with options
+        form.append('file', buffer, {
+            filename: fileName,
+            contentType: mimeType,
+            knownLength: buffer.length
+        });
+        try {
+            console.log(`📤 Subiendo Attachment a EspoCRM API: ${fileName} (${mimeType})`);
+            // Calculate real Content-Length of the multipart form
+            const getLength = (formData) => {
+                return new Promise((resolve, reject) => {
+                    formData.getLength((err, length) => {
+                        if (err)
+                            reject(err);
+                        else
+                            resolve(length);
+                    });
+                });
+            };
+            let contentLength = 0;
+            try {
+                contentLength = await getLength(form);
+                console.log(`   - Payload Size (Calculated): ${contentLength} bytes`);
+            }
+            catch (e) {
+                console.error('⚠️ Could not calculate form length:', e);
+            }
+            // Headers: Valid options for axios + form-data with explicit length
+            const headers = {
+                ...form.getHeaders(),
+                'X-Api-Key': env_1.env.espocrmApiKey,
+                'Content-Length': contentLength // FORCE explicit length
+            };
+            console.log('   - Headers:', JSON.stringify(headers, null, 2));
+            const response = await axios_1.default.post(`${env_1.env.espocrmBaseUrl}/api/v1/Attachment`, form, {
+                headers,
+                maxBodyLength: Infinity,
+                maxContentLength: Infinity
+            });
+            console.log(`✅ Attachment subido exitosamente. ID: ${response.data.id}`);
+            return response.data;
+        }
+        catch (error) {
+            console.error('❌ Error subiendo Attachment (Status):', error.response?.status);
+            console.error('❌ Error subiendo Attachment (Data):', JSON.stringify(error.response?.data, null, 2));
+            throw new Error(`Error subiendo Attachment: ${error.message}`);
+        }
+    }
 }
 exports.EspoCRMClient = EspoCRMClient;

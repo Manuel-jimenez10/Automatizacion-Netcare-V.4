@@ -256,5 +256,100 @@ export class EspoCRMClient {
       throw new Error(`Error al obtener archivo: ${error.message}`);
     }
   }
+
+  // Obtener archivo como Buffer completo (más robusto para servir a Twilio)
+  async getFileAsBuffer(fileId: string): Promise<any> {
+    try {
+      console.log(`📂 Obteniendo archivo (buffer) con ID: ${fileId} usando EntryPoint`);
+      
+      let baseUrl = env.espocrmBaseUrl;
+      baseUrl = baseUrl.replace(/\/api\/v1\/?$/, '');
+      baseUrl = baseUrl.replace(/\/$/, '');
+      
+      const downloadUrl = `${baseUrl}/?entryPoint=download&id=${fileId}`;
+      
+      console.log(`📡 Descargando (buffer) desde: ${downloadUrl}`);
+
+      const response = await axios({
+        method: 'GET',
+        url: downloadUrl,
+        responseType: 'arraybuffer',
+        headers: {
+          'X-Api-Key': env.espocrmApiKey,
+        },
+        maxContentLength: Infinity,
+        maxRedirects: 5,
+        timeout: 30000, // 30s timeout para archivos grandes
+      });
+      
+      console.log(`   ✅ Descarga buffer completa: ${response.data.byteLength} bytes`);
+      return response;
+    } catch (error: any) {
+      console.error(`Error al obtener archivo (buffer) ${fileId}:`, error.message);
+      throw new Error(`Error al obtener archivo: ${error.message}`);
+    }
+  }
+
+
+  // Subir Adjunto (Nativo EspoCRM)
+  // POST /api/v1/Attachment
+  // EspoCRM requiere JSON con archivo en Base64 (NO multipart/form-data)
+  // Docs: https://docs.espocrm.com/development/api/attachment/
+  async uploadAttachment(
+    buffer: Buffer, 
+    fileName: string, 
+    mimeType: string, 
+    relatedType?: string, 
+    relatedId?: string,
+    role: string = 'Attachment'
+  ): Promise<any> {
+    try {
+      console.log(`📤 Subiendo Attachment a EspoCRM API: ${fileName} (${mimeType})`);
+      console.log(`   - Buffer size: ${buffer.length} bytes`);
+      
+      // Convertir buffer a Base64 data URI (formato requerido por EspoCRM)
+      const base64Content = buffer.toString('base64');
+      const fileDataUri = `data:${mimeType};base64,${base64Content}`;
+
+      // Construir payload JSON según documentación oficial de EspoCRM
+      // Para campos tipo File: usar relatedType y relatedId
+      // Docs: https://docs.espocrm.com/development/api/attachment/
+      const payload: any = {
+        name: fileName,
+        type: mimeType,
+        role: role,
+        field: 'archivoAdjunto',
+        file: fileDataUri,
+      };
+
+      // Para campos tipo File: usar relatedType y relatedId
+      if (relatedType) payload.relatedType = relatedType;
+      if (relatedId) payload.relatedId = relatedId;
+
+      console.log(`   - Payload keys: ${Object.keys(payload).join(', ')}`);
+      console.log(`   - Base64 size: ${base64Content.length} chars`);
+
+      // Usar axios directamente para manejar payload grande y obtener error completo
+      const url = `${env.espocrmBaseUrl}/api/v1/Attachment`;
+      console.log(`📡 Requesting (Direct): POST ${url}`);
+      
+      const response = await axios.post(url, payload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Api-Key': env.espocrmApiKey,
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+      });
+
+      console.log(`✅ Attachment subido exitosamente. ID: ${response.data.id}`);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Error subiendo Attachment (Status):', error.response?.status);
+      console.error('❌ Error subiendo Attachment (Headers):', JSON.stringify(error.response?.headers, null, 2));
+      console.error('❌ Error subiendo Attachment (Data):', JSON.stringify(error.response?.data, null, 2));
+      throw new Error(`Error subiendo Attachment: ${error.message}`);
+    }
+  }
 }
 

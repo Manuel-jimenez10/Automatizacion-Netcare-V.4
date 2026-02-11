@@ -23,5 +23,10 @@ exports.env = {
     fieldCotizacionEnviadaWhatsapp: 'cotizacinEnviadaPorWhatsapp', // Fecha de envío por WhatsApp
     twilioStatusCallbackUrl: process.env.TWILIO_STATUS_CALLBACK_URL,
     storageUploadUrl: 'https://nc.salesontop.com/upload.php', // URL corregida
-    storageToken: process.env.STORAGE_TOKEN || '', // Token opcional para seguridad
+    storageToken: process.env.STORAGE_TOKEN || '', // Token para autenticación en PHP
+    maxMediaSize: 16 * 1024 * 1024, // 16MB - límite de Twilio
+    // Webhook interno para notificaciones de EspoCRM
+    internalWebhookSecret: process.env.INTERNAL_WEBHOOK_SECRET || 'b37da2062c4d946e2642aa837dd274db',
+    adminNotificationPhone: process.env.ADMIN_NOTIFICATION_PHONE || process.env.TEST_PHONE_NUMBER || '',
+    notificationTemplateSid: process.env.NOTIFICATION_MESSAGE_SID || '',
 };

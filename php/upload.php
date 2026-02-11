@@ -4,22 +4,23 @@
  * Recibe archivos desde el backend Node.js y los guarda en el servidor.
  * 
  * Uso: POST /upload.php
- * Params: file (multipart/form-data), token (opcional para seguridad)
+ * Headers: Authorization: Bearer <token>
+ * Params: file (multipart/form-data)
  */
 
 header('Content-Type: application/json');
 
 // --- CONFIGURACIÓN ---
-$storageDir = __DIR__ . '/storage/whatsapp/'; // Ruta donde se guardarán los archivos
+$basePath = __DIR__ . '/storage/whatsapp/'; // Directorio base
 $baseUrl = 'https://' . $_SERVER['HTTP_HOST'] . '/storage/whatsapp/'; // URL pública base
 $allowedMimes = [
     'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-    'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/mp4', 'audio/amr',
-    'video/mp4', 'video/mpeg',
+    'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/mp4', 'audio/amr', 'audio/aac',
+    'video/mp4', 'video/mpeg', 'video/3gpp',
     'application/pdf'
 ];
 $maxFileSize = 20 * 1024 * 1024; // 20MB
-$secretToken = 'CAMBIAR_POR_TOKEN_SEGURO'; // Configurar mismo token en Node.js .env
+$secretToken = 'CAMBIAR_POR_TOKEN_SEGURO'; // ⚠️ Sincronizar con STORAGE_TOKEN en .env
 
 // --- VALIDACIONES BASICAS ---
 
@@ -30,13 +31,20 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-// 2. Validar Token (Opcional pero recomendado)
+// 2. Validar Token Bearer
 $headers = getallheaders();
 $authHeader = isset($headers['Authorization']) ? $headers['Authorization'] : '';
-// Descomentar para activar seguridad por token
-// if ($authHeader !== 'Bearer ' . $secretToken) {
+
+// Extraer token del header "Bearer <token>"
+$providedToken = '';
+if (preg_match('/Bearer\s+(.+)/i', $authHeader, $matches)) {
+    $providedToken = $matches[1];
+}
+
+// Activar validación de token (descomentar si se configura token)
+// if ($providedToken !== $secretToken) {
 //     http_response_code(403);
-//     echo json_encode(['error' => 'Unauthorized']);
+//     echo json_encode(['error' => 'Unauthorized', 'message' => 'Token inválido o faltante']);
 //     exit;
 // }
 
@@ -56,7 +64,7 @@ if ($file['size'] > $maxFileSize) {
     exit;
 }
 
-// 5. Validar Tipo MIME
+// 5. Validar Tipo MIME (real, no solo extensión)
 $finfo = new finfo(FILEINFO_MIME_TYPE);
 $mimeType = $finfo->file($file['tmp_name']);
 
@@ -67,6 +75,15 @@ if (!in_array($mimeType, $allowedMimes)) {
 }
 
 // --- PROCESAMIENTO ---
+
+// Determinar categoría y subcarpeta
+$category = 'document';
+if (strpos($mimeType, 'image') === 0) $category = 'image';
+if (strpos($mimeType, 'audio') === 0) $category = 'voice_note';
+if (strpos($mimeType, 'video') === 0) $category = 'video';
+
+// Crear ruta con subcarpeta por categoría
+$storageDir = $basePath . $category . '/';
 
 // Crear directorio si no existe
 if (!is_dir($storageDir)) {
@@ -89,13 +106,7 @@ $destination = $storageDir . $uniqueName;
 
 // Mover archivo
 if (move_uploaded_file($file['tmp_name'], $destination)) {
-    $publicUrl = $baseUrl . $uniqueName;
-    
-    // Determinar categoría simple
-    $category = 'document';
-    if (strpos($mimeType, 'image') === 0) $category = 'image';
-    if (strpos($mimeType, 'audio') === 0) $category = 'voice_note';
-    if (strpos($mimeType, 'video') === 0) $category = 'video';
+    $publicUrl = $baseUrl . $category . '/' . $uniqueName;
 
     echo json_encode([
         'success' => true,
@@ -110,3 +121,4 @@ if (move_uploaded_file($file['tmp_name'], $destination)) {
     http_response_code(500);
     echo json_encode(['error' => 'Failed to write file to disk']);
 }
+
