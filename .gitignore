@@ -11,7 +11,6 @@ yarn-debug.log*
 debug.log
 
 # Build
-dist/
 build/
 
 # OS
