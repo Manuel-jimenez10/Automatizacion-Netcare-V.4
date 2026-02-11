@@ -238,8 +238,7 @@ const sendNotificationTemplate = async ({ phone, adminName, messageContent, stat
             messageParams.statusCallback = statusCallback;
         }
         const message = await client.messages.create(messageParams);
-        console.log(`✅ Notificación por Template enviada exitosamente`);
-        console.log(`   - SID: ${message.sid}`);
+        console.log(`✅ Notificación enviada a ${formattedPhone}`);
         return message;
     }
     catch (error) {

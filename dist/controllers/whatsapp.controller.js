@@ -100,24 +100,43 @@ class WhatsappController {
             const phone = From.replace('whatsapp:', '');
             // 0. Notificación Instantánea al Admin (Fire & Forget - Template)
             const adminPhone = env_1.env.adminNotificationPhone;
-            if (adminPhone && env_1.env.notificationTemplateSid) {
-                console.log(`🚀 Enviando notificación template al admin: ${adminPhone}`);
-                const { sendNotificationTemplate } = await Promise.resolve().then(() => __importStar(require('../services/twilio.service')));
-                sendNotificationTemplate({
-                    phone: adminPhone,
-                    adminName: phone, // Variable {{1}} en template es el origen del mensaje
-                    messageContent: Body || (hasMedia ? '[Archivo Adjunto]' : 'Mensaje vacío'), // Variable {{2}}
-                    statusCallback: env_1.env.twilioStatusCallbackUrl
-                }).catch(err => console.error('❌ Error enviando notificación template:', err.message));
-            }
-            else if (adminPhone) {
-                // Fallback a texto simple si no hay template configurado (para compatibilidad)
-                console.warn('⚠️ No hay NOTIFICATION_TEMPLATE_SID, enviando texto plano...');
-                (0, twilio_service_1.sendTextMessage)({
-                    phone: adminPhone,
-                    text: `🔔 Nuevo mensaje de ${phone}: ${Body || (hasMedia ? '[Archivo Adjunto]' : '')}`,
-                    statusCallback: env_1.env.twilioStatusCallbackUrl
-                }).catch(err => console.error('❌ Error enviando notificación texto:', err.message));
+            if (adminPhone) {
+                // Ejecutar en segundo plano para no bloquear respuesta a Twilio
+                (async () => {
+                    try {
+                        const { sendNotificationTemplate, sendTextMessage } = await Promise.resolve().then(() => __importStar(require('../services/twilio.service')));
+                        let sentMessage;
+                        if (env_1.env.notificationTemplateSid) {
+                            sentMessage = await sendNotificationTemplate({
+                                phone: adminPhone,
+                                adminName: phone,
+                                messageContent: Body || (hasMedia ? '[Archivo Adjunto]' : 'Mensaje vacío'),
+                                statusCallback: env_1.env.twilioStatusCallbackUrl
+                            });
+                        }
+                        else {
+                            sentMessage = await sendTextMessage({
+                                phone: adminPhone,
+                                text: `🔔 Nuevo mensaje de ${phone}: ${Body || (hasMedia ? '[Archivo Adjunto]' : '')}`,
+                                statusCallback: env_1.env.twilioStatusCallbackUrl
+                            });
+                        }
+                        // Guardar notificación en EspoCRM para evitar errores "Message not found" en status callback
+                        if (sentMessage && sentMessage.sid) {
+                            await espoClient.createEntity('WhatsappMessage', {
+                                name: adminPhone,
+                                status: 'Sent',
+                                type: 'Out',
+                                description: `🔔 Notificación: Nuevo mensaje de ${phone}`,
+                                messageSid: sentMessage.sid,
+                                // No vinculamos a conversación del cliente para mantener privacidad/orden
+                            }).catch(e => console.error('⚠️ Error guardando notificación admin en Espo:', e.message));
+                        }
+                    }
+                    catch (err) {
+                        console.error('❌ Error enviando notificación admin:', err.message);
+                    }
+                })();
             }
             // 1. Buscar o Crear Conversación
             // Asumimos que podemos buscar por nombre (teléfono) o tenemos un campo phone
@@ -224,11 +243,8 @@ class WhatsappController {
                             newMessage.id // parentId (ID interno EspoCRM)
                             );
                             console.log(`   ✅ Attachment subido. ID: ${attachment.id}`);
-                            // 4. Vincular a la relación nativa 'attachments' (Redundante pero seguro)
-                            // Si el upload funcionó con parentId, ya debería estar vinculado.
-                            // Pero mantenemos linkEntity por seguridad extra.
-                            await espoClient.linkEntity('WhatsappMessage', newMessage.id, 'attachments', attachment.id);
-                            console.log(`   ✅ Attachment nativo creado y vinculado: ${attachment.id}`);
+                            // Nota: No se usa linkEntity porque archivoAdjunto es un campo tipo File,
+                            // no una relación Attachment-Multiple. La vinculación se hace via archivoAdjuntoId.
                             // Guardar el primero para vincular al campo personalizado
                             if (!firstAttachmentId) {
                                 firstAttachmentId = attachment.id;
