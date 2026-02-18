@@ -98,46 +98,52 @@ class WhatsappController {
             }
             // Cleanup Phone (Twilio sends whatsapp:+123456)
             const phone = From.replace('whatsapp:', '');
-            // 0. Notificación Instantánea al Admin (Fire & Forget - Template)
-            const adminPhone = env_1.env.adminNotificationPhone;
-            if (adminPhone) {
-                // Ejecutar en segundo plano para no bloquear respuesta a Twilio
-                (async () => {
-                    try {
-                        const { sendNotificationTemplate, sendTextMessage } = await Promise.resolve().then(() => __importStar(require('../services/twilio.service')));
-                        let sentMessage;
-                        if (env_1.env.notificationTemplateSid) {
-                            sentMessage = await sendNotificationTemplate({
-                                phone: adminPhone,
-                                adminName: phone,
-                                messageContent: Body || (hasMedia ? '[Archivo Adjunto]' : 'Mensaje vacío'),
-                                statusCallback: env_1.env.twilioStatusCallbackUrl
-                            });
-                        }
-                        else {
-                            sentMessage = await sendTextMessage({
-                                phone: adminPhone,
-                                text: `🔔 Nuevo mensaje de ${phone}: ${Body || (hasMedia ? '[Archivo Adjunto]' : '')}`,
-                                statusCallback: env_1.env.twilioStatusCallbackUrl
-                            });
-                        }
-                        // Guardar notificación en EspoCRM para evitar errores "Message not found" en status callback
-                        if (sentMessage && sentMessage.sid) {
-                            await espoClient.createEntity('WhatsappMessage', {
-                                name: adminPhone,
-                                status: 'Sent',
-                                type: 'Out',
-                                description: `🔔 Notificación: Nuevo mensaje de ${phone}`,
-                                messageSid: sentMessage.sid,
-                                // No vinculamos a conversación del cliente para mantener privacidad/orden
-                            }).catch(e => console.error('⚠️ Error guardando notificación admin en Espo:', e.message));
-                        }
-                    }
-                    catch (err) {
-                        console.error('❌ Error enviando notificación admin:', err.message);
-                    }
-                })();
-            }
+            // ============================================================================
+            // 🚫 DESACTIVADO (2026-02-18): Notificación instantánea al admin por cada
+            //    mensaje entrante. Se comenta para dejar de usarlo sin eliminar el código.
+            // ============================================================================
+            // // 0. Notificación Instantánea al Admin (Fire & Forget - Template)
+            // const adminPhone = env.adminNotificationPhone;
+            // 
+            // if (adminPhone) {
+            //   // Ejecutar en segundo plano para no bloquear respuesta a Twilio
+            //   (async () => {
+            //     try {
+            //       const { sendNotificationTemplate, sendTextMessage } = await import('../services/twilio.service');
+            //       let sentMessage: any;
+            //
+            //       if (env.notificationTemplateSid) {
+            //         sentMessage = await sendNotificationTemplate({
+            //           phone: adminPhone,
+            //           adminName: phone, 
+            //           messageContent: Body || (hasMedia ? '[Archivo Adjunto]' : 'Mensaje vacío'), 
+            //           statusCallback: env.twilioStatusCallbackUrl
+            //         });
+            //       } else {
+            //         sentMessage = await sendTextMessage({
+            //            phone: adminPhone,
+            //            text: `🔔 Nuevo mensaje de ${phone}: ${Body || (hasMedia ? '[Archivo Adjunto]' : '')}`,
+            //            statusCallback: env.twilioStatusCallbackUrl
+            //         });
+            //       }
+            //
+            //       // Guardar notificación en EspoCRM para evitar errores "Message not found" en status callback
+            //       if (sentMessage && sentMessage.sid) {
+            //          await espoClient.createEntity('WhatsappMessage', {
+            //            name: adminPhone,
+            //            status: 'Sent',
+            //            type: 'Out',
+            //            description: `🔔 Notificación: Nuevo mensaje de ${phone}`,
+            //            messageSid: sentMessage.sid,
+            //            // No vinculamos a conversación del cliente para mantener privacidad/orden
+            //          }).catch(e => console.error('⚠️ Error guardando notificación admin en Espo:', e.message));
+            //       }
+            //
+            //     } catch (err: any) {
+            //       console.error('❌ Error enviando notificación admin:', err.message);
+            //     }
+            //   })();
+            // }
             // 1. Buscar o Crear Conversación
             // Asumimos que podemos buscar por nombre (teléfono) o tenemos un campo phone
             // En este caso, buscaremos por 'name' que asumimos contiene el número
