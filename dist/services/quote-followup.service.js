@@ -53,12 +53,18 @@ class QuoteFollowUpService {
             }
             console.log(`\n📊 Se encontraron ${quotes.length} Quote(s) para procesar\n`);
             // 4. Procesar cada Quote individualmente
-            let successCount = 0;
+            let sentCount = 0;
+            let skippedCount = 0;
             let errorCount = 0;
             for (const quote of quotes) {
                 try {
-                    await this.processQuote(quote);
-                    successCount++;
+                    const result = await this.processQuote(quote);
+                    if (result === 'sent') {
+                        sentCount++;
+                    }
+                    else {
+                        skippedCount++;
+                    }
                 }
                 catch (error) {
                     console.error(`❌ Error procesando Quote ${quote.id}:`, error.message);
@@ -71,7 +77,8 @@ class QuoteFollowUpService {
             console.log('📊 RESUMEN DEL PROCESO');
             console.log('📊 ============================================');
             console.log(`   Total Quotes encontradas: ${quotes.length}`);
-            console.log(`   ✅ Procesadas exitosamente: ${successCount}`);
+            console.log(`   ✅ Mensaje enviado: ${sentCount}`);
+            console.log(`   ⏳ Saltadas (< 7 días): ${skippedCount}`);
             console.log(`   ❌ Con errores: ${errorCount}`);
             console.log('📊 ============================================\n');
         }
@@ -116,7 +123,7 @@ class QuoteFollowUpService {
         const clientName = contact.name || contact.firstName || 'Cliente';
         console.log(`👤 Cliente: ${clientName}`);
         // Llamar a función auxiliar para continuar (ya que cambié el flujo)
-        await this.performQuoteFollowUp(quote, phoneValidation.formattedNumber, clientName);
+        return await this.performQuoteFollowUp(quote, phoneValidation.formattedNumber, clientName);
     }
     // Nueva función auxiliar para completar el envío después de obtener los datos
     async performQuoteFollowUp(quote, phone, clientName) {
@@ -147,22 +154,19 @@ class QuoteFollowUpService {
         console.log(`⏳ Días pasados: ${diffDays} (Requerido: >= 7)`);
         if (diffDays < 7) {
             console.log('⏳ Aún no han pasado 7 días. Saltando.');
-            return;
+            return 'skipped';
         }
         // ---------------------------------
         // --- MANEJO DEL PDF ---
-        let pdfUrl;
         const pdfFileId = quote.cotizacinPropuestaId; // Campo corregido
-        if (pdfFileId) {
-            // Construir URL pública para el PDF (Proxy)
-            // Formato: <PUBLIC_URL>/api/files/<FILE_ID>
-            pdfUrl = `${env_1.env.publicUrl}/api/files/${pdfFileId}`;
-            console.log(`📎 PDF adjunto detectado. ID: ${pdfFileId}`);
-            console.log(`📎 URL Pública: ${pdfUrl}`);
+        if (!pdfFileId) {
+            throw new Error(`La Quote "${quote.name}" no tiene PDF de cotización adjunto (campo cotizacinPropuestaId vacío).`);
         }
-        else {
-            console.log('⚠️ No hay cotización adjunta (campo cotizacinPropuestaId vacío). Se enviará sin PDF.');
-        }
+        // Construir URL pública para el PDF via Proxy (EspoCRM requiere auth)
+        // El proxy en /api/files/:id descarga de EspoCRM con API Key y lo sirve sin auth
+        const pdfUrl = `${env_1.env.publicUrl}/api/files/${pdfFileId}`;
+        console.log(`📎 PDF adjunto detectado. ID: ${pdfFileId}`);
+        console.log(`📎 URL Pública (Proxy): ${pdfUrl}`);
         // ----------------------
         // 7. Enviar mensaje de WhatsApp
         console.log('📱 Enviando mensaje de seguimiento...');
@@ -251,6 +255,7 @@ class QuoteFollowUpService {
         });
         console.log(`✅ Quote "${quote.name}" procesada exitosamente`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+        return 'sent';
     }
     /**
      * Extrae y valida el número de teléfono de un contacto

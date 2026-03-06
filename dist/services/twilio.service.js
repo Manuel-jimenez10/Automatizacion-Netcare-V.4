@@ -3,43 +3,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendNotificationTemplate = exports.sendMediaMessage = exports.sendTextMessage = exports.sendQuoteFollowUpMessage = exports.sendTaskCompletedMessage = void 0;
+exports.sendMediaMessage = exports.sendTextMessage = exports.sendInvoiceConfirmedMessage = exports.sendQuotePresentedMessage = exports.sendQuoteFollowUpMessage = void 0;
 const twilio_1 = __importDefault(require("twilio"));
 const env_1 = require("../config/env");
 const client = (0, twilio_1.default)(env_1.env.twilioAccountSid, env_1.env.twilioAuthToken);
-const sendTaskCompletedMessage = async ({ phone, clientName, taskName, }) => {
-    if (!phone)
-        throw new Error('El número de teléfono es requerido');
-    // Validar formato de teléfono (debe incluir código de país)
-    // Remove spaces and non-digit characters except leading '+'
-    const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
-    const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
-    console.log(`📱 Enviando WhatsApp a: ${formattedPhone}`);
-    try {
-        const message = await client.messages.create({
-            from: env_1.env.twilioWhatsappFrom,
-            to: `whatsapp:${formattedPhone}`,
-            contentSid: env_1.env.twilioTemplateSid,
-            contentVariables: JSON.stringify({
-                1: clientName || 'Cliente',
-                2: taskName,
-            }),
-        });
-        console.log(`✅ Mensaje de WhatsApp enviado exitosamente`);
-        console.log(`   - SID: ${message.sid}`);
-        console.log(`   - Estado: ${message.status}`);
-        console.log(`   - Template: ${env_1.env.twilioTemplateSid}`);
-        return message;
-    }
-    catch (error) {
-        console.error('❌ Error enviando WhatsApp:', error.message);
-        if (error.code) {
-            console.error(`   - Código de error Twilio: ${error.code}`);
-        }
-        throw error;
-    }
-};
-exports.sendTaskCompletedMessage = sendTaskCompletedMessage;
 const sendQuoteFollowUpMessage = async ({ phone, clientName, quoteName, pdfUrl, }) => {
     if (!phone)
         throw new Error('El número de teléfono es requerido');
@@ -130,6 +97,126 @@ const sendQuoteFollowUpMessage = async ({ phone, clientName, quoteName, pdfUrl, 
     }
 };
 exports.sendQuoteFollowUpMessage = sendQuoteFollowUpMessage;
+const sendQuotePresentedMessage = async ({ phone, clientName, quoteName, pdfUrl, }) => {
+    if (!phone)
+        throw new Error('El número de teléfono es requerido');
+    if (!env_1.env.quotePresentedTemplateSid)
+        throw new Error('QUOTE_PRESENTED_SID no configurado en .env');
+    // Validar formato de teléfono
+    const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
+    const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
+    console.log(`📱 Enviando WhatsApp de cotización presentada a: ${formattedPhone}`);
+    try {
+        const variables = {
+            1: clientName || 'Cliente', // Variable {{1}} es NOMBRE
+            2: quoteName, // Variable {{2}} es COTIZACION
+            3: pdfUrl || '', // Variable {{3}} es MEDIA (PDF)
+        };
+        console.log(`📦 Variables enviadas a Twilio:`, JSON.stringify(variables));
+        // Validación de Status Callback URL (misma lógica que sendQuoteFollowUpMessage)
+        let validatedCallbackUrl = undefined;
+        if (env_1.env.twilioStatusCallbackUrl) {
+            const rawUrl = env_1.env.twilioStatusCallbackUrl.trim();
+            const hasProtocol = rawUrl.startsWith('https://') || rawUrl.startsWith('http://');
+            const hasDoubleUrl = /https?:\/\/.*https?:\/\//.test(rawUrl);
+            const hasSpace = /\s/.test(rawUrl);
+            const hasUnderscore = /:\/\/[^/]*_/.test(rawUrl);
+            if (hasProtocol && !hasDoubleUrl && !hasSpace && !hasUnderscore) {
+                validatedCallbackUrl = rawUrl;
+                console.log('  ✅ StatusCallback URL válida');
+            }
+            else {
+                console.warn('  ⚠️ StatusCallback URL inválida - NO se enviará');
+            }
+        }
+        const messageParams = {
+            from: env_1.env.twilioWhatsappFrom,
+            to: `whatsapp:${formattedPhone}`,
+            contentSid: env_1.env.quotePresentedTemplateSid,
+            contentVariables: JSON.stringify(variables),
+        };
+        if (validatedCallbackUrl) {
+            messageParams.statusCallback = validatedCallbackUrl;
+            console.log('📡 Enviando CON statusCallback:', validatedCallbackUrl);
+        }
+        const message = await client.messages.create(messageParams);
+        console.log(`✅ Mensaje de cotización presentada enviado exitosamente`);
+        console.log(`   - SID: ${message.sid}`);
+        console.log(`   - Estado: ${message.status}`);
+        console.log(`   - Template: ${env_1.env.quotePresentedTemplateSid}`);
+        console.log(`   - ErrorCode: ${message.errorCode || 'ninguno'}`);
+        console.log(`   - ErrorMessage: ${message.errorMessage || 'ninguno'}`);
+        return message;
+    }
+    catch (error) {
+        console.error('❌ Error enviando WhatsApp de cotización presentada:', error.message);
+        if (error.code) {
+            console.error(`   - Código de error Twilio: ${error.code}`);
+        }
+        throw error;
+    }
+};
+exports.sendQuotePresentedMessage = sendQuotePresentedMessage;
+const sendInvoiceConfirmedMessage = async ({ phone, clientName, invoiceName, pdfUrl, }) => {
+    if (!phone)
+        throw new Error('El número de teléfono es requerido');
+    if (!env_1.env.prefacturaConfirmedTemplateSid)
+        throw new Error('PREFACTURA_PRESENTED no configurado en .env');
+    // Validar formato de teléfono
+    const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
+    const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
+    console.log(`📱 Enviando WhatsApp de prefactura confirmada a: ${formattedPhone}`);
+    try {
+        const variables = {
+            1: clientName || 'Cliente', // Variable {{1}} es NOMBRE
+            2: invoiceName, // Variable {{2}} es PREFACTURA
+            3: pdfUrl || '', // Variable {{3}} es MEDIA (PDF)
+        };
+        console.log(`📦 Variables enviadas a Twilio:`, JSON.stringify(variables));
+        // Validación de Status Callback URL
+        let validatedCallbackUrl = undefined;
+        if (env_1.env.twilioStatusCallbackUrl) {
+            const rawUrl = env_1.env.twilioStatusCallbackUrl.trim();
+            const hasProtocol = rawUrl.startsWith('https://') || rawUrl.startsWith('http://');
+            const hasDoubleUrl = /https?:\/\/.*https?:\/\//.test(rawUrl);
+            const hasSpace = /\s/.test(rawUrl);
+            const hasUnderscore = /:\/\/[^/]*_/.test(rawUrl);
+            if (hasProtocol && !hasDoubleUrl && !hasSpace && !hasUnderscore) {
+                validatedCallbackUrl = rawUrl;
+                console.log('  ✅ StatusCallback URL válida');
+            }
+            else {
+                console.warn('  ⚠️ StatusCallback URL inválida - NO se enviará');
+            }
+        }
+        const messageParams = {
+            from: env_1.env.twilioWhatsappFrom,
+            to: `whatsapp:${formattedPhone}`,
+            contentSid: env_1.env.prefacturaConfirmedTemplateSid,
+            contentVariables: JSON.stringify(variables),
+        };
+        if (validatedCallbackUrl) {
+            messageParams.statusCallback = validatedCallbackUrl;
+            console.log('📡 Enviando CON statusCallback:', validatedCallbackUrl);
+        }
+        const message = await client.messages.create(messageParams);
+        console.log(`✅ Mensaje de prefactura confirmada enviado exitosamente`);
+        console.log(`   - SID: ${message.sid}`);
+        console.log(`   - Estado: ${message.status}`);
+        console.log(`   - Template: ${env_1.env.prefacturaConfirmedTemplateSid}`);
+        console.log(`   - ErrorCode: ${message.errorCode || 'ninguno'}`);
+        console.log(`   - ErrorMessage: ${message.errorMessage || 'ninguno'}`);
+        return message;
+    }
+    catch (error) {
+        console.error('❌ Error enviando WhatsApp de prefactura confirmada:', error.message);
+        if (error.code) {
+            console.error(`   - Código de error Twilio: ${error.code}`);
+        }
+        throw error;
+    }
+};
+exports.sendInvoiceConfirmedMessage = sendInvoiceConfirmedMessage;
 const sendTextMessage = async ({ phone, text, statusCallback, }) => {
     if (!phone)
         throw new Error('El número de teléfono es requerido');
@@ -214,36 +301,3 @@ const sendMediaMessage = async ({ phone, mediaUrls, body, statusCallback, }) => 
     }
 };
 exports.sendMediaMessage = sendMediaMessage;
-const sendNotificationTemplate = async ({ phone, adminName, messageContent, statusCallback, }) => {
-    if (!phone)
-        throw new Error('El número de teléfono es requerido');
-    if (!env_1.env.notificationTemplateSid)
-        throw new Error('NOTIFICATION_TEMPLATE_SID no configurado');
-    // Limpiar teléfono
-    const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
-    const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
-    console.log(`📱 Enviando Template de Notificación a: ${formattedPhone}`);
-    try {
-        const variables = {
-            1: adminName || 'Admin',
-            2: messageContent
-        };
-        const messageParams = {
-            from: env_1.env.twilioWhatsappFrom,
-            to: `whatsapp:${formattedPhone}`,
-            contentSid: env_1.env.notificationTemplateSid,
-            contentVariables: JSON.stringify(variables),
-        };
-        if (statusCallback) {
-            messageParams.statusCallback = statusCallback;
-        }
-        const message = await client.messages.create(messageParams);
-        console.log(`✅ Notificación enviada a ${formattedPhone}`);
-        return message;
-    }
-    catch (error) {
-        console.error('❌ Error enviando notificación por Template:', error.message);
-        throw error;
-    }
-};
-exports.sendNotificationTemplate = sendNotificationTemplate;

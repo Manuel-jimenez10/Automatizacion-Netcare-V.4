@@ -34,20 +34,15 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const test_controller_1 = require("../controllers/test.controller");
 const router = (0, express_1.Router)();
-// 🧪 Ruta de prueba - Mensaje simple SIN template
-router.get('/send-whatsapp', test_controller_1.testWhatsApp);
-// 🧪 Ruta de prueba - Mensaje CON template
-router.get('/test-template', test_controller_1.testTemplateMessage);
-// 🚀 Ruta para disparar el Job manualmente
+// 🚀 Ruta para disparar el Job de seguimiento de cotizaciones manualmente
 router.get('/trigger-job', async (_req, res) => {
     try {
         const { QuoteFollowUpService } = await Promise.resolve().then(() => __importStar(require('../services/quote-followup.service')));
         const service = new QuoteFollowUpService();
         // Ejecutar en segundo plano para no bloquear
         service.processQuoteFollowUps().catch(err => console.error(err));
-        res.json({ message: 'Job iniciado manualmenet. Revisa la consola.' });
+        res.json({ message: 'Job iniciado manualmente. Revisa la consola.' });
     }
     catch (error) {
         res.status(500).json({ error: error.message });

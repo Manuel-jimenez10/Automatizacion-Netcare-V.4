@@ -61,13 +61,18 @@ export class QuoteFollowUpService {
       console.log(`\n📊 Se encontraron ${quotes.length} Quote(s) para procesar\n`);
 
       // 4. Procesar cada Quote individualmente
-      let successCount = 0;
+      let sentCount = 0;
+      let skippedCount = 0;
       let errorCount = 0;
 
       for (const quote of quotes) {
         try {
-          await this.processQuote(quote);
-          successCount++;
+          const result = await this.processQuote(quote);
+          if (result === 'sent') {
+            sentCount++;
+          } else {
+            skippedCount++;
+          }
         } catch (error: any) {
           console.error(`❌ Error procesando Quote ${quote.id}:`, error.message);
           errorCount++;
@@ -80,7 +85,8 @@ export class QuoteFollowUpService {
       console.log('📊 RESUMEN DEL PROCESO');
       console.log('📊 ============================================');
       console.log(`   Total Quotes encontradas: ${quotes.length}`);
-      console.log(`   ✅ Procesadas exitosamente: ${successCount}`);
+      console.log(`   ✅ Mensaje enviado: ${sentCount}`);
+      console.log(`   ⏳ Saltadas (< 7 días): ${skippedCount}`);
       console.log(`   ❌ Con errores: ${errorCount}`);
       console.log('📊 ============================================\n');
 
@@ -100,7 +106,7 @@ export class QuoteFollowUpService {
    * 4. Envía mensaje de WhatsApp
    * 5. Marca Quote como notificada
    */
-  private async processQuote(quote: EspoCRMQuote): Promise<void> {
+  private async processQuote(quote: EspoCRMQuote): Promise<'sent' | 'skipped'> {
     console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log(`📋 Procesando Quote: "${quote.name}" (ID: ${quote.id})`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -134,11 +140,11 @@ export class QuoteFollowUpService {
     console.log(`👤 Cliente: ${clientName}`);
 
     // Llamar a función auxiliar para continuar (ya que cambié el flujo)
-    await this.performQuoteFollowUp(quote, phoneValidation.formattedNumber!, clientName);
+    return await this.performQuoteFollowUp(quote, phoneValidation.formattedNumber!, clientName);
   }
 
   // Nueva función auxiliar para completar el envío después de obtener los datos
-  private async performQuoteFollowUp(quote: EspoCRMQuote, phone: string, clientName: string): Promise<void> {
+  private async performQuoteFollowUp(quote: EspoCRMQuote, phone: string, clientName: string): Promise<'sent' | 'skipped'> {
 
     // --- LOGICA DE FECHAS (NUEVA) ---
     const datePresentedStr = quote.datePresented;
@@ -160,33 +166,32 @@ export class QuoteFollowUpService {
       referenceLabel = 'Fecha de Creación (Date Quoted)';
     }
 
-    // Calcular días pasados
+    // Calcular días pasados (positivos si la fecha ya pasó, negativos si es fecha futura)
     const now = new Date();
-    const diffTime = Math.abs(now.getTime() - referenceDate.getTime());
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+    const diffTime = now.getTime() - referenceDate.getTime();
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)); 
 
     console.log(`📅 Referencia: ${referenceLabel} (${referenceDate.toISOString().split('T')[0]})`);
     console.log(`⏳ Días pasados: ${diffDays} (Requerido: >= 7)`);
 
     if (diffDays < 7) {
       console.log('⏳ Aún no han pasado 7 días. Saltando.');
-      return;
+      return 'skipped';
     }
     // ---------------------------------
 
     // --- MANEJO DEL PDF ---
-    let pdfUrl: string | undefined;
     const pdfFileId = quote.cotizacinPropuestaId; // Campo corregido
     
-    if (pdfFileId) {
-       // Construir URL pública para el PDF (Proxy)
-       // Formato: <PUBLIC_URL>/api/files/<FILE_ID>
-       pdfUrl = `${env.publicUrl}/api/files/${pdfFileId}`;
-       console.log(`📎 PDF adjunto detectado. ID: ${pdfFileId}`);
-       console.log(`📎 URL Pública: ${pdfUrl}`);
-    } else {
-       console.log('⚠️ No hay cotización adjunta (campo cotizacinPropuestaId vacío). Se enviará sin PDF.');
+    if (!pdfFileId) {
+       throw new Error(`La Quote "${quote.name}" no tiene PDF de cotización adjunto (campo cotizacinPropuestaId vacío).`);
     }
+
+    // Construir URL pública para el PDF via Proxy (EspoCRM requiere auth)
+    // El proxy en /api/files/:id descarga de EspoCRM con API Key y lo sirve sin auth
+    const pdfUrl = `${env.publicUrl}/api/files/${pdfFileId}`;
+    console.log(`📎 PDF adjunto detectado. ID: ${pdfFileId}`);
+    console.log(`📎 URL Pública (Proxy): ${pdfUrl}`);
     // ----------------------
 
 
@@ -291,6 +296,8 @@ export class QuoteFollowUpService {
 
     console.log(`✅ Quote "${quote.name}" procesada exitosamente`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+    return 'sent';
   }
 
   /**

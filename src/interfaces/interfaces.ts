@@ -41,6 +41,18 @@ export interface EspoCRMQuote {
   createdAt: string; // Fecha de creación (Date Quoted)
 }
 
+export interface EspoCRMInvoice {
+  id: string;
+  name: string;
+  status: string;
+  billingContactId?: string;
+  billingContactName?: string;
+  accountId?: string;
+  accountName?: string;
+  prefacturaAdjuntaId?: string; // ID del archivo PDF adjunto (campo File: prefacturaAdjunta)
+  createdAt: string;
+}
+
 export interface EspoCRMAccount {
   id: string;
   name: string;

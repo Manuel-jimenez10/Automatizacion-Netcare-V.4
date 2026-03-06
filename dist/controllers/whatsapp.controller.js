@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.taskCompleted = exports.WhatsappController = void 0;
+exports.WhatsappController = void 0;
 const espocrm_api_client_service_1 = require("../services/espocrm-api-client.service");
 const twilio_service_1 = require("../services/twilio.service");
 const env_1 = require("../config/env");
@@ -98,46 +98,6 @@ class WhatsappController {
             }
             // Cleanup Phone (Twilio sends whatsapp:+123456)
             const phone = From.replace('whatsapp:', '');
-            // 0. Notificación Instantánea al Admin (Fire & Forget - Template)
-            const adminPhone = env_1.env.adminNotificationPhone;
-            if (adminPhone) {
-                // Ejecutar en segundo plano para no bloquear respuesta a Twilio
-                (async () => {
-                    try {
-                        const { sendNotificationTemplate, sendTextMessage } = await Promise.resolve().then(() => __importStar(require('../services/twilio.service')));
-                        let sentMessage;
-                        if (env_1.env.notificationTemplateSid) {
-                            sentMessage = await sendNotificationTemplate({
-                                phone: adminPhone,
-                                adminName: phone,
-                                messageContent: Body || (hasMedia ? '[Archivo Adjunto]' : 'Mensaje vacío'),
-                                statusCallback: env_1.env.twilioStatusCallbackUrl
-                            });
-                        }
-                        else {
-                            sentMessage = await sendTextMessage({
-                                phone: adminPhone,
-                                text: `🔔 Nuevo mensaje de ${phone}: ${Body || (hasMedia ? '[Archivo Adjunto]' : '')}`,
-                                statusCallback: env_1.env.twilioStatusCallbackUrl
-                            });
-                        }
-                        // Guardar notificación en EspoCRM para evitar errores "Message not found" en status callback
-                        if (sentMessage && sentMessage.sid) {
-                            await espoClient.createEntity('WhatsappMessage', {
-                                name: adminPhone,
-                                status: 'Sent',
-                                type: 'Out',
-                                description: `🔔 Notificación: Nuevo mensaje de ${phone}`,
-                                messageSid: sentMessage.sid,
-                                // No vinculamos a conversación del cliente para mantener privacidad/orden
-                            }).catch(e => console.error('⚠️ Error guardando notificación admin en Espo:', e.message));
-                        }
-                    }
-                    catch (err) {
-                        console.error('❌ Error enviando notificación admin:', err.message);
-                    }
-                })();
-            }
             // 1. Buscar o Crear Conversación
             // Asumimos que podemos buscar por nombre (teléfono) o tenemos un campo phone
             // En este caso, buscaremos por 'name' que asumimos contiene el número
@@ -393,22 +353,3 @@ class WhatsappController {
     }
 }
 exports.WhatsappController = WhatsappController;
-// Legacy function to support existing webhook.routes.ts
-const taskCompleted = async (req, res) => {
-    try {
-        const { phone, clientName, taskName } = req.body;
-        console.log('✅ Webhook Task Completed recibido:', { phone, clientName, taskName });
-        const { sendTaskCompletedMessage } = await Promise.resolve().then(() => __importStar(require('../services/twilio.service')));
-        await sendTaskCompletedMessage({
-            phone,
-            clientName,
-            taskName
-        });
-        res.status(200).send({ success: true });
-    }
-    catch (error) {
-        console.error('Error en taskCompleted:', error);
-        res.status(500).send(error.message);
-    }
-};
-exports.taskCompleted = taskCompleted;

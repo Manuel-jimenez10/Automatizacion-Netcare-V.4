@@ -25,6 +25,9 @@ export const env = {
   internalWebhookSecret: process.env.INTERNAL_WEBHOOK_SECRET || 'b37da2062c4d946e2642aa837dd274db',
   adminNotificationPhone: process.env.ADMIN_NOTIFICATION_PHONE || process.env.TEST_PHONE_NUMBER || '',
   notificationTemplateSid: process.env.NOTIFICATION_MESSAGE_SID || '',
+  quotePresentedTemplateSid: process.env.QUOTE_PRESENTED_SID || '',
+  quotePresentedTemplateName: process.env.QUOTE_PRESENTED_NAME || '',
+  prefacturaConfirmedTemplateSid: process.env.PREFACTURA_PRESENTED || '',
 };
 
 
