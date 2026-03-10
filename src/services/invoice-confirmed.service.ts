@@ -1,7 +1,8 @@
 import { EspoCRMClient } from './espocrm-api-client.service';
 import { sendInvoiceConfirmedMessage } from './twilio.service';
 import { env } from '../config/env';
-import { EspoCRMInvoice, PhoneValidation } from '../interfaces/interfaces';
+import { EspoCRMInvoice } from '../interfaces/interfaces';
+import { extractAndValidatePhone } from '../utils/phone-utils';
 
 export class InvoiceConfirmedService {
   private espoCRMClient: EspoCRMClient;
@@ -42,7 +43,7 @@ export class InvoiceConfirmedService {
       const contact = await this.espoCRMClient.getContact(invoice.billingContactId);
 
       // 4. Extraer y validar teléfono desde el CONTACTO
-      const phoneValidation = this.extractAndValidatePhone(contact);
+      const phoneValidation = extractAndValidatePhone(contact);
 
       if (!phoneValidation.isValid) {
         throw new Error(`Billing Contact "${contact.name}" no tiene un teléfono válido: ${phoneValidation.error}`);
@@ -166,53 +167,4 @@ export class InvoiceConfirmedService {
     }
   }
 
-  /**
-   * Extrae y valida el número de teléfono (Reutilizado)
-   */
-  private extractAndValidatePhone(entity: any): PhoneValidation {
-    console.log('🔍 Buscando número de teléfono en el contacto...');
-
-    const phoneFields = ['phoneNumber', 'phoneMobile', 'phoneOffice', 'phone'];
-    let phone: string | undefined;
-
-    for (const field of phoneFields) {
-      if (entity[field]) {
-        phone = entity[field];
-        console.log(`   ✓ Teléfono encontrado en campo: ${field}`);
-        break;
-      }
-    }
-
-    if (!phone) {
-      return {
-        isValid: false,
-        error: `No se encontró número de teléfono. Campos revisados: ${phoneFields.join(', ')}`,
-      };
-    }
-
-    let cleanedPhone = phone.replace(/[\s\-\(\)]/g, '');
-
-    if (!cleanedPhone) {
-      return { isValid: false, error: 'El número de teléfono está vacío después de limpiarlo' };
-    }
-
-    if (!cleanedPhone.startsWith('+')) {
-      cleanedPhone = `+${cleanedPhone}`;
-    }
-
-    const digitsOnly = cleanedPhone.replace(/\D/g, '');
-    if (digitsOnly.length < 10) {
-      return {
-        isValid: false,
-        error: `El número de teléfono es muy corto: ${cleanedPhone} (solo ${digitsOnly.length} dígitos)`,
-      };
-    }
-
-    console.log(`   ✓ Número limpiado y validado: ${cleanedPhone}`);
-
-    return {
-      isValid: true,
-      formattedNumber: cleanedPhone,
-    };
-  }
 }

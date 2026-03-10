@@ -4,6 +4,7 @@ exports.QuotePresentedService = void 0;
 const espocrm_api_client_service_1 = require("./espocrm-api-client.service");
 const twilio_service_1 = require("./twilio.service");
 const env_1 = require("../config/env");
+const phone_utils_1 = require("../utils/phone-utils");
 class QuotePresentedService {
     constructor() {
         this.espoCRMClient = new espocrm_api_client_service_1.EspoCRMClient();
@@ -34,7 +35,7 @@ class QuotePresentedService {
             // 3. Obtener Contacto
             const contact = await this.espoCRMClient.getContact(quote.billingContactId);
             // 4. Extraer y validar teléfono desde el CONTACTO
-            const phoneValidation = this.extractAndValidatePhone(contact);
+            const phoneValidation = (0, phone_utils_1.extractAndValidatePhone)(contact);
             if (!phoneValidation.isValid) {
                 throw new Error(`Billing Contact "${contact.name}" no tiene un teléfono válido: ${phoneValidation.error}`);
             }
@@ -141,46 +142,6 @@ class QuotePresentedService {
             console.error('❌ Error guardando mensaje en WhatsappMessage (el mensaje sí se envió):', error.message);
             // No relanzamos el error porque el envío de Twilio fue exitoso
         }
-    }
-    /**
-     * Extrae y valida el número de teléfono (Reutilizado)
-     */
-    extractAndValidatePhone(entity) {
-        console.log('🔍 Buscando número de teléfono en el contacto...');
-        const phoneFields = ['phoneNumber', 'phoneMobile', 'phoneOffice', 'phone'];
-        let phone;
-        for (const field of phoneFields) {
-            if (entity[field]) {
-                phone = entity[field];
-                console.log(`   ✓ Teléfono encontrado en campo: ${field}`);
-                break;
-            }
-        }
-        if (!phone) {
-            return {
-                isValid: false,
-                error: `No se encontró número de teléfono. Campos revisados: ${phoneFields.join(', ')}`,
-            };
-        }
-        let cleanedPhone = phone.replace(/[\s\-\(\)]/g, '');
-        if (!cleanedPhone) {
-            return { isValid: false, error: 'El número de teléfono está vacío después de limpiarlo' };
-        }
-        if (!cleanedPhone.startsWith('+')) {
-            cleanedPhone = `+${cleanedPhone}`;
-        }
-        const digitsOnly = cleanedPhone.replace(/\D/g, '');
-        if (digitsOnly.length < 10) {
-            return {
-                isValid: false,
-                error: `El número de teléfono es muy corto: ${cleanedPhone} (solo ${digitsOnly.length} dígitos)`,
-            };
-        }
-        console.log(`   ✓ Número limpiado y validado: ${cleanedPhone}`);
-        return {
-            isValid: true,
-            formattedNumber: cleanedPhone,
-        };
     }
 }
 exports.QuotePresentedService = QuotePresentedService;

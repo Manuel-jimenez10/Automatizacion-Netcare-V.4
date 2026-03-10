@@ -4,6 +4,7 @@ exports.QuoteFollowUpService = void 0;
 const espocrm_api_client_service_1 = require("./espocrm-api-client.service");
 const twilio_service_1 = require("./twilio.service");
 const env_1 = require("../config/env");
+const phone_utils_1 = require("../utils/phone-utils");
 class QuoteFollowUpService {
     constructor() {
         this.espoCRMClient = new espocrm_api_client_service_1.EspoCRMClient();
@@ -113,7 +114,7 @@ class QuoteFollowUpService {
         // 2. Obtener Contacto
         const contact = await this.espoCRMClient.getContact(quote.billingContactId);
         // 3. Extraer y validar teléfono desde el CONTACTO
-        const phoneValidation = this.extractAndValidatePhone(contact);
+        const phoneValidation = (0, phone_utils_1.extractAndValidatePhone)(contact);
         if (!phoneValidation.isValid) {
             throw new Error(`Billing Contact "${contact.name}" no tiene un teléfono válido: ${phoneValidation.error}`);
         }
@@ -146,10 +147,10 @@ class QuoteFollowUpService {
             referenceDate = new Date(dateQuotedStr);
             referenceLabel = 'Fecha de Creación (Date Quoted)';
         }
-        // Calcular días pasados
+        // Calcular días pasados (positivos si la fecha ya pasó, negativos si es fecha futura)
         const now = new Date();
-        const diffTime = Math.abs(now.getTime() - referenceDate.getTime());
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        const diffTime = now.getTime() - referenceDate.getTime();
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
         console.log(`📅 Referencia: ${referenceLabel} (${referenceDate.toISOString().split('T')[0]})`);
         console.log(`⏳ Días pasados: ${diffDays} (Requerido: >= 7)`);
         if (diffDays < 7) {
@@ -256,77 +257,6 @@ class QuoteFollowUpService {
         console.log(`✅ Quote "${quote.name}" procesada exitosamente`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
         return 'sent';
-    }
-    /**
-     * Extrae y valida el número de teléfono de un contacto
-     * Reutiliza la misma lógica del servicio de Tasks
-     */
-    extractAndValidatePhone(entity) {
-        console.log('🔍 Buscando número de teléfono en el contacto...');
-        // Posibles campos donde puede estar el teléfono
-        const phoneFields = ['phoneNumber', 'phoneMobile', 'phoneOffice', 'phone'];
-        let phone;
-        let fieldFound;
-        // Buscar el primer campo con un valor
-        for (const field of phoneFields) {
-            if (entity[field]) {
-                phone = entity[field];
-                fieldFound = field;
-                console.log(`   ✓ Teléfono encontrado en campo: ${field}`);
-                break;
-            }
-        }
-        // Validar que se encontró un teléfono
-        if (!phone) {
-            return {
-                isValid: false,
-                error: `No se encontró número de teléfono. Campos revisados: ${phoneFields.join(', ')}`,
-            };
-        }
-        // Limpiar el número (quitar espacios, guiones, paréntesis)
-        let cleanedPhone = phone.replace(/[\s\-\(\)]/g, '');
-        // Validar que no esté vacío después de limpiar
-        if (!cleanedPhone) {
-            return {
-                isValid: false,
-                error: 'El número de teléfono está vacío después de limpiarlo',
-            };
-        }
-        // Asegurar que tenga código de país (+)
-        if (!cleanedPhone.startsWith('+')) {
-            cleanedPhone = `+${cleanedPhone}`;
-        }
-        // Validar longitud mínima (al menos 10 dígitos sin contar el +)
-        const digitsOnly = cleanedPhone.replace(/\D/g, '');
-        if (digitsOnly.length < 10) {
-            return {
-                isValid: false,
-                error: `El número de teléfono es muy corto: ${cleanedPhone} (solo ${digitsOnly.length} dígitos)`,
-            };
-        }
-        console.log(`   ✓ Número limpiado y validado: ${cleanedPhone}`);
-        return {
-            isValid: true,
-            formattedNumber: cleanedPhone,
-        };
-    }
-    /**
-     * Obtiene el nombre del cliente
-     * Reutiliza la misma lógica del servicio de Tasks
-     */
-    getClientName(entity) {
-        // Si tiene campo "name", usarlo directamente
-        if (entity.name) {
-            return entity.name;
-        }
-        // Si tiene firstName y lastName, combinarlos
-        if (entity.firstName || entity.lastName) {
-            const firstName = entity.firstName || '';
-            const lastName = entity.lastName || '';
-            return `${firstName} ${lastName}`.trim();
-        }
-        // Fallback: usar el ID de la entidad
-        return entity.id || 'Cliente';
     }
 }
 exports.QuoteFollowUpService = QuoteFollowUpService;
