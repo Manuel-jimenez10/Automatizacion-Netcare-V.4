@@ -14,17 +14,36 @@ import { PhoneValidation } from '../interfaces/interfaces';
 export function extractAndValidatePhone(entity: any): PhoneValidation {
   console.log('🔍 Buscando número de teléfono en el contacto...');
 
-  // Posibles campos donde puede estar el teléfono
+  // Debug: mostrar todos los campos phone-related que el API devuelve
   const phoneFields = ['phoneNumber', 'phoneMobile', 'phoneOffice', 'phone'];
+  console.log('   📋 Campos de teléfono en el contacto:');
+  for (const field of phoneFields) {
+    console.log(`      - ${field}: "${entity[field]}" (tipo: ${typeof entity[field]})`);
+  }
+  // Mostrar phoneNumberData si existe (estructura interna de EspoCRM)
+  if (entity.phoneNumberData) {
+    console.log(`      - phoneNumberData: ${JSON.stringify(entity.phoneNumberData)}`);
+  }
 
   let phone: string | undefined;
 
-  // Buscar el primer campo con un valor
+  // Buscar el primer campo con un valor (string no vacío)
   for (const field of phoneFields) {
-    if (entity[field]) {
-      phone = entity[field];
+    const value = entity[field];
+    if (value && typeof value === 'string' && value.trim() !== '') {
+      phone = value.trim();
       console.log(`   ✓ Teléfono encontrado en campo: ${field}`);
       break;
+    }
+  }
+
+  // Fallback: si no se encontró en campos directos, buscar en phoneNumberData
+  // EspoCRM almacena los teléfonos internamente en un array phoneNumberData
+  if (!phone && entity.phoneNumberData && Array.isArray(entity.phoneNumberData)) {
+    const primaryPhone = entity.phoneNumberData.find((p: any) => p.primary) || entity.phoneNumberData[0];
+    if (primaryPhone && primaryPhone.phoneNumber) {
+      phone = primaryPhone.phoneNumber.trim();
+      console.log(`   ✓ Teléfono encontrado en phoneNumberData (primary): ${phone}`);
     }
   }
 
@@ -32,7 +51,7 @@ export function extractAndValidatePhone(entity: any): PhoneValidation {
   if (!phone) {
     return {
       isValid: false,
-      error: `No se encontró número de teléfono. Campos revisados: ${phoneFields.join(', ')}`,
+      error: `No se encontró número de teléfono. Campos revisados: ${phoneFields.join(', ')}, phoneNumberData`,
     };
   }
 

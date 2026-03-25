@@ -16,6 +16,8 @@ export interface EspoCRMContact {
   phoneNumber?: string;
   phoneMobile?: string;
   phoneOffice?: string;
+  phone?: string;
+  phoneNumberData?: Array<{ phoneNumber: string; type: string; primary: boolean }>;
   firstName?: string;
   lastName?: string;
 }
