@@ -89,3 +89,14 @@ export interface WhatsappConverstion {
   fechaHoraUltimoMensaje?: string;
   description?: string; // Last message text often goes here in Espo
 }
+
+export interface EspoCRMWhatsappTemplate {
+  id: string;
+  name: string;
+  whatsappTemplateSID: string;      // SID del template de Twilio
+  whatsappTemplateName?: string;    // Nombre descriptivo del template
+  contentMessageTemplate: string;   // Texto → variable {{1}}
+  archivoAdjuntoId?: string;        // ID del archivo adjunto → variable {{2}} (condicional)
+  reportsId?: string;               // ID del Report relacionado (link: reports, Many-to-One)
+  reportsName?: string;             // Nombre del Report relacionado
+}

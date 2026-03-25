@@ -5,6 +5,7 @@ import invoiceConfirmedRoutes from './invoice-confirmed.routes';
 import filesRoutes from './files.routes';
 import whatsappRoutes from './whatsapp.routes';
 import mediaRoutes from './media.routes';
+import whatsappTemplateRoutes from './whatsapp-template.routes';
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.use('/prefacturas', invoiceConfirmedRoutes);
 router.use('/files', filesRoutes);
 router.use('/whatsapp', whatsappRoutes);
 router.use('/media', mediaRoutes);
+router.use('/templates', whatsappTemplateRoutes);
 
 export default router;
