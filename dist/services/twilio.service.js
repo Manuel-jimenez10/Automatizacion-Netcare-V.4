@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendMediaMessage = exports.sendTextMessage = exports.sendInvoiceConfirmedMessage = exports.sendQuotePresentedMessage = exports.sendQuoteFollowUpMessage = void 0;
+exports.sendDynamicTemplateMessage = exports.sendMediaMessage = exports.sendTextMessage = exports.sendInvoiceConfirmedMessage = exports.sendQuotePresentedMessage = exports.sendQuoteFollowUpMessage = void 0;
 const twilio_1 = __importDefault(require("twilio"));
 const env_1 = require("../config/env");
 const client = (0, twilio_1.default)(env_1.env.twilioAccountSid, env_1.env.twilioAuthToken);
@@ -301,3 +301,59 @@ const sendMediaMessage = async ({ phone, mediaUrls, body, statusCallback, }) => 
     }
 };
 exports.sendMediaMessage = sendMediaMessage;
+const sendDynamicTemplateMessage = async ({ phone, contentSid, contentVariables, }) => {
+    if (!phone)
+        throw new Error('El número de teléfono es requerido');
+    if (!contentSid)
+        throw new Error('El contentSid del template es requerido');
+    // Validar formato de teléfono
+    const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
+    const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
+    console.log(`📱 Enviando WhatsApp con template dinámico a: ${formattedPhone}`);
+    console.log(`   - Template SID: ${contentSid}`);
+    console.log(`📦 Variables enviadas a Twilio:`, JSON.stringify(contentVariables));
+    try {
+        // Validación de Status Callback URL (misma lógica que las demás funciones)
+        let validatedCallbackUrl = undefined;
+        if (env_1.env.twilioStatusCallbackUrl) {
+            const rawUrl = env_1.env.twilioStatusCallbackUrl.trim();
+            const hasProtocol = rawUrl.startsWith('https://') || rawUrl.startsWith('http://');
+            const hasDoubleUrl = /https?:\/\/.*https?:\/\//.test(rawUrl);
+            const hasSpace = /\s/.test(rawUrl);
+            const hasUnderscore = /:\/\/[^/]*_/.test(rawUrl);
+            if (hasProtocol && !hasDoubleUrl && !hasSpace && !hasUnderscore) {
+                validatedCallbackUrl = rawUrl;
+                console.log('  ✅ StatusCallback URL válida');
+            }
+            else {
+                console.warn('  ⚠️ StatusCallback URL inválida - NO se enviará');
+            }
+        }
+        const messageParams = {
+            from: env_1.env.twilioWhatsappFrom,
+            to: `whatsapp:${formattedPhone}`,
+            contentSid: contentSid,
+            contentVariables: JSON.stringify(contentVariables),
+        };
+        if (validatedCallbackUrl) {
+            messageParams.statusCallback = validatedCallbackUrl;
+            console.log('📡 Enviando CON statusCallback:', validatedCallbackUrl);
+        }
+        const message = await client.messages.create(messageParams);
+        console.log(`✅ Mensaje con template dinámico enviado exitosamente`);
+        console.log(`   - SID: ${message.sid}`);
+        console.log(`   - Estado: ${message.status}`);
+        console.log(`   - Template: ${contentSid}`);
+        console.log(`   - ErrorCode: ${message.errorCode || 'ninguno'}`);
+        console.log(`   - ErrorMessage: ${message.errorMessage || 'ninguno'}`);
+        return message;
+    }
+    catch (error) {
+        console.error('❌ Error enviando template dinámico:', error.message);
+        if (error.code) {
+            console.error(`   - Código de error Twilio: ${error.code}`);
+        }
+        throw error;
+    }
+};
+exports.sendDynamicTemplateMessage = sendDynamicTemplateMessage;

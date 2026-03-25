@@ -10,6 +10,7 @@ const invoice_confirmed_routes_1 = __importDefault(require("./invoice-confirmed.
 const files_routes_1 = __importDefault(require("./files.routes"));
 const whatsapp_routes_1 = __importDefault(require("./whatsapp.routes"));
 const media_routes_1 = __importDefault(require("./media.routes"));
+const whatsapp_template_routes_1 = __importDefault(require("./whatsapp-template.routes"));
 const router = (0, express_1.Router)();
 router.use('/quotes', quote_followup_routes_1.default);
 router.use('/quotes', quote_presented_routes_1.default);
@@ -17,4 +18,5 @@ router.use('/prefacturas', invoice_confirmed_routes_1.default);
 router.use('/files', files_routes_1.default);
 router.use('/whatsapp', whatsapp_routes_1.default);
 router.use('/media', media_routes_1.default);
+router.use('/templates', whatsapp_template_routes_1.default);
 exports.default = router;
