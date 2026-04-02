@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import app from './app';
 import { startQuoteFollowUpJob } from './jobs/quote-followup.job';
+import { startInvoiceReminderJob } from './jobs/invoice-reminder.job';
 
 const PORT = process.env.PORT || 3000;
 
@@ -11,4 +12,5 @@ app.listen(PORT, () => {
   
   // Iniciar Cron Jobs
   startQuoteFollowUpJob();
+  startInvoiceReminderJob();
 });

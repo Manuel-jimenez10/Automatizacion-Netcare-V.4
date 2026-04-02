@@ -21,8 +21,10 @@ process.nextTick(() => {
     
     // Importación dinámica para evitar efectos secundarios al inicio
     const { startQuoteFollowUpJob } = require('./jobs/quote-followup.job');
+    const { startInvoiceReminderJob } = require('./jobs/invoice-reminder.job');
 
     startQuoteFollowUpJob();
+    startInvoiceReminderJob();
   } catch (err) {
     console.error('❌ Cron init error:', err);
   }

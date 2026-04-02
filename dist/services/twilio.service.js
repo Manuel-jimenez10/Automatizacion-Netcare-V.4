@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendDynamicTemplateMessage = exports.sendMediaMessage = exports.sendTextMessage = exports.sendInvoiceConfirmedMessage = exports.sendQuotePresentedMessage = exports.sendQuoteFollowUpMessage = void 0;
+exports.sendDynamicTemplateMessage = exports.sendPrefacturaReminderMessage = exports.sendMediaMessage = exports.sendTextMessage = exports.sendInvoiceConfirmedMessage = exports.sendQuotePresentedMessage = exports.sendQuoteFollowUpMessage = void 0;
 const twilio_1 = __importDefault(require("twilio"));
 const env_1 = require("../config/env");
 const client = (0, twilio_1.default)(env_1.env.twilioAccountSid, env_1.env.twilioAuthToken);
@@ -301,6 +301,70 @@ const sendMediaMessage = async ({ phone, mediaUrls, body, statusCallback, }) => 
     }
 };
 exports.sendMediaMessage = sendMediaMessage;
+const sendPrefacturaReminderMessage = async ({ phone, clientName, invoiceName, fechaLimiteDePago, pdfUrl, templateSid, isOverdue, }) => {
+    if (!phone)
+        throw new Error('El número de teléfono es requerido');
+    if (!templateSid)
+        throw new Error('El template SID es requerido');
+    const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
+    const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
+    console.log(`📱 Enviando recordatorio de prefactura a: ${formattedPhone} (Template: ${templateSid})`);
+    try {
+        // Variables condicionales según el template:
+        // ──────────────────────────────────────────────────
+        // 3 DÍAS (HX8411...):  {{1}}=nombre, {{2}}=prefactura, {{3}}=fechaLímite, {{4}}=PDF
+        // VENCIDO (HX4936...): {{1}}=nombre, {{2}}=fechaLímite, {{3}}=PDF
+        // ──────────────────────────────────────────────────
+        let variables;
+        if (isOverdue) {
+            // Template VENCIMIENTO: 3 variables
+            variables = {
+                1: clientName || 'Cliente', // {{1}} nombre del cliente
+                2: fechaLimiteDePago, // {{2}} fecha límite de pago
+                3: pdfUrl || '', // {{3}} PDF adjunto
+            };
+        }
+        else {
+            // Template 3 DÍAS: 4 variables
+            variables = {
+                1: clientName || 'Cliente', // {{1}} nombre del cliente
+                2: invoiceName, // {{2}} nombre de la prefactura
+                3: fechaLimiteDePago, // {{3}} fecha límite de pago
+                4: pdfUrl || '', // {{4}} PDF adjunto
+            };
+        }
+        console.log(`📦 Variables enviadas a Twilio (${isOverdue ? 'VENCIDO' : '3 DÍAS'}):`, JSON.stringify(variables));
+        let validatedCallbackUrl = undefined;
+        if (env_1.env.twilioStatusCallbackUrl) {
+            const rawUrl = env_1.env.twilioStatusCallbackUrl.trim();
+            const hasProtocol = rawUrl.startsWith('https://') || rawUrl.startsWith('http://');
+            const hasDoubleUrl = /https?:\/\/.*https?:\/\//.test(rawUrl);
+            const hasSpace = /\s/.test(rawUrl);
+            const hasUnderscore = /:\/\/[^/]*_/.test(rawUrl);
+            if (hasProtocol && !hasDoubleUrl && !hasSpace && !hasUnderscore) {
+                validatedCallbackUrl = rawUrl;
+            }
+        }
+        const messageParams = {
+            from: env_1.env.twilioWhatsappFrom,
+            to: `whatsapp:${formattedPhone}`,
+            contentSid: templateSid,
+            contentVariables: JSON.stringify(variables),
+        };
+        if (validatedCallbackUrl) {
+            messageParams.statusCallback = validatedCallbackUrl;
+        }
+        const message = await client.messages.create(messageParams);
+        console.log(`✅ Mensaje de recordatorio enviado exitosamente`);
+        console.log(`   - SID: ${message.sid}`);
+        return message;
+    }
+    catch (error) {
+        console.error('❌ Error enviando recordatorio de prefactura:', error.message);
+        throw error;
+    }
+};
+exports.sendPrefacturaReminderMessage = sendPrefacturaReminderMessage;
 const sendDynamicTemplateMessage = async ({ phone, contentSid, contentVariables, }) => {
     if (!phone)
         throw new Error('El número de teléfono es requerido');
