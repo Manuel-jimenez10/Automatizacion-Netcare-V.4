@@ -34,4 +34,5 @@ exports.env = {
     prefacturaConfirmedTemplateSid: process.env.PREFACTURA_PRESENTED || '',
     prefacturaReminder3DaysSid: process.env.TWILIO_PREFACTURA_REMINDER_3DAYS_SID || '',
     prefacturaReminderOverdueSid: process.env.TWILIO_PREFACTURA_REMINDER_OVERDUE_SID || '',
+    mensajeIniciarWhatsapp: process.env.MENSAJE_INICIAR_WHATSAPP || '',
 };

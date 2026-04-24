@@ -7,6 +7,7 @@ import filesRoutes from './files.routes';
 import whatsappRoutes from './whatsapp.routes';
 import mediaRoutes from './media.routes';
 import whatsappTemplateRoutes from './whatsapp-template.routes';
+import whatsappInitRoutes from './whatsapp-init.routes';
 
 const router = Router();
 
@@ -18,5 +19,6 @@ router.use('/files', filesRoutes);
 router.use('/whatsapp', whatsappRoutes);
 router.use('/media', mediaRoutes);
 router.use('/templates', whatsappTemplateRoutes);
+router.use('/whatsapp-init', whatsappInitRoutes);
 
 export default router;
