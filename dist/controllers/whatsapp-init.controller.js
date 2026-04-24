@@ -13,19 +13,20 @@ class WhatsappInitController {
         try {
             console.log('📨 Evento recibido: Enviar mensaje inicial de WhatsApp');
             console.log('   Body:', req.body);
-            // EspoCRM enviará el payload del registro WhatsappMessage
-            // Buscamos el contactId
-            const contactId = req.body.contactId;
+            // EspoCRM envía los campos en snake_case
+            const contactId = req.body.contactId || req.body.contact_id || req.body.id;
+            const messageEntityId = req.body.entityId || req.body.entity_id;
+            const conversationId = req.body.whatsappConverstionId || req.body.whatsapp_converstion_id;
             if (!contactId) {
-                console.error('❌ Error: contactId no proporcionado en el body');
+                console.error('❌ Error: contactId / contact_id no proporcionado en el body');
                 res.status(400).json({
                     success: false,
-                    message: 'contactId es requerido en el body',
+                    message: 'contactId o contact_id es requerido en el body',
                 });
                 return;
             }
             const service = new whatsapp_init_service_1.WhatsappInitService();
-            const result = await service.handleInitConversation(contactId);
+            const result = await service.handleInitConversation(contactId, messageEntityId, conversationId);
             res.status(200).json({
                 success: true,
                 message: 'Mensaje inicial enviado exitosamente',

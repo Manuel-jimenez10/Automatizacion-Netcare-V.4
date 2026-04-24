@@ -266,8 +266,8 @@ class WhatsappController {
                 return;
             }
             if (!text && !attachmentId) {
-                console.error('❌ Falta texto y no hay adjunto');
-                res.status(400).send('Missing content (text or file)');
+                console.log('ℹ️ Sin texto ni adjunto — probablemente será enviado via template (whatsapp-init)');
+                res.status(200).send({ status: 'ignored', reason: 'no_content_template_init' });
                 return;
             }
             const callbackUrl = env_1.env.twilioStatusCallbackUrl;
