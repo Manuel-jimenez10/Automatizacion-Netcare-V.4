@@ -1,5 +1,5 @@
 import { EspoCRMClient } from './espocrm-api-client.service';
-import { sendInvoiceConfirmedMessage } from './twilio.service';
+import { sendInvoiceConfirmedMessage, sendFacturaPresentedMessage, sendFacturaAdicionalMessage } from './twilio.service';
 import { env } from '../config/env';
 import { EspoCRMInvoice } from '../interfaces/interfaces';
 import { extractAndValidatePhone } from '../utils/phone-utils';
@@ -55,25 +55,80 @@ export class InvoiceConfirmedService {
       const clientName = contact.name || contact.firstName || 'Cliente';
       console.log(`👤 Cliente: ${clientName}`);
 
-      // 6. Manejo del PDF (campo File: prefacturaAdjunta → prefacturaAdjuntaId)
-      const pdfFileId = invoice.prefacturaAdjuntaId;
-      
-      if (!pdfFileId) {
-        throw new Error(`La Prefactura "${invoice.name}" no tiene PDF adjunto (campo prefacturaAdjunta vacío).`);
+      // 6. Manejo de PDFs (Prefactura y Factura)
+      const prefacturaPdfId = invoice.prefacturaAdjuntaId;
+      const hasPrefactura = !!prefacturaPdfId;
+
+      let facturaPdfId: string | undefined = undefined;
+      // Extraer el PDF del campo múltiple "Factura"
+      if (invoice.facturaIds && invoice.facturaNames) {
+        for (const id of invoice.facturaIds) {
+          const fileName = invoice.facturaNames[id] || '';
+          if (fileName.toLowerCase().endsWith('.pdf')) {
+            facturaPdfId = id;
+            break;
+          }
+        }
+      }
+      // Fallback si EspoCRM no retorna facturaNames pero sí IDs
+      if (!facturaPdfId && invoice.facturaIds && invoice.facturaIds.length > 0 && !invoice.facturaNames) {
+         facturaPdfId = invoice.facturaIds[0];
       }
 
-      const pdfUrl = `${env.publicUrl}/api/files/${pdfFileId}`;
-      console.log(`📎 PDF adjunto detectado. ID: ${pdfFileId}`);
-      console.log(`📎 URL Pública (Proxy): ${pdfUrl}`);
+      const hasFactura = !!facturaPdfId;
 
-      // 7. Enviar mensaje de WhatsApp
-      console.log('📱 Enviando mensaje de prefactura confirmada...');
-      const twilioResponse = await sendInvoiceConfirmedMessage({
-        phone: phoneValidation.formattedNumber!,
-        clientName: clientName,
-        invoiceName: invoice.name,
-        pdfUrl: pdfUrl,
-      });
+      if (!hasPrefactura && !hasFactura) {
+        throw new Error(`La Prefactura "${invoice.name}" no tiene ningún PDF adjunto (ni prefactura ni factura).`);
+      }
+
+      // Generar URLs Públicas
+      const prefacturaUrl = hasPrefactura ? `${env.publicUrl}/api/files/${prefacturaPdfId}` : undefined;
+      const facturaUrl = hasFactura ? `${env.publicUrl}/api/files/${facturaPdfId}` : undefined;
+
+      if (hasPrefactura) console.log(`📎 Prefactura PDF detectada. ID: ${prefacturaPdfId}`);
+      if (hasFactura) console.log(`📎 Factura PDF detectada. ID: ${facturaPdfId}`);
+
+      // 7. Lógica de Árbol (T1, T2, T3) y Envío de WhatsApp
+      let twilioResponse: any;
+
+      if (hasPrefactura && hasFactura) {
+         // CASO T1: Ambas
+         console.log('📱 Enviando T1: Template Prefactura Normal + Template Factura Adicional...');
+         
+         // 1er Envío: Prefactura
+         twilioResponse = await sendInvoiceConfirmedMessage({
+           phone: phoneValidation.formattedNumber!,
+           clientName: clientName,
+           invoiceName: invoice.name,
+           pdfUrl: prefacturaUrl,
+         });
+
+         // 2do Envío: Factura Adicional
+         await sendFacturaAdicionalMessage({
+           phone: phoneValidation.formattedNumber!,
+           pdfUrl: facturaUrl,
+         });
+
+      } else if (hasPrefactura && !hasFactura) {
+         // CASO T3: Solo Prefactura
+         console.log('📱 Enviando T3: Solo Template Prefactura Normal...');
+         twilioResponse = await sendInvoiceConfirmedMessage({
+           phone: phoneValidation.formattedNumber!,
+           clientName: clientName,
+           invoiceName: invoice.name,
+           pdfUrl: prefacturaUrl,
+         });
+
+      } else if (!hasPrefactura && hasFactura) {
+         // CASO T2: Solo Factura
+         console.log('📱 Enviando T2: Solo Template Factura Sola...');
+         twilioResponse = await sendFacturaPresentedMessage({
+           phone: phoneValidation.formattedNumber!,
+           clientName: clientName,
+           invoiceName: invoice.name,
+           pdfUrl: facturaUrl,
+         });
+      }
 
       // 8. Guardar mensaje en WhatsappMessage (EspoCRM)
       await this.logMessageInEspo(invoice, phoneValidation.formattedNumber!, clientName, twilioResponse);

@@ -28,6 +28,8 @@ export const env = {
   quotePresentedTemplateSid: process.env.QUOTE_PRESENTED_SID || '',
   quotePresentedTemplateName: process.env.QUOTE_PRESENTED_NAME || '',
   prefacturaConfirmedTemplateSid: process.env.PREFACTURA_PRESENTED || '',
+  facturaPresentedTemplateSid: process.env.FACTURA_PRESENTED || '',
+  facturaAdicionalTemplateSid: process.env.FACTURA_ADICIONAL || '',
   prefacturaReminder3DaysSid: process.env.TWILIO_PREFACTURA_REMINDER_3DAYS_SID || '',
   prefacturaReminderOverdueSid: process.env.TWILIO_PREFACTURA_REMINDER_OVERDUE_SID || '',
   mensajeIniciarWhatsapp: process.env.MENSAJE_INICIAR_WHATSAPP || '',

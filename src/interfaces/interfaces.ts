@@ -52,6 +52,8 @@ export interface EspoCRMInvoice {
   accountId?: string;
   accountName?: string;
   prefacturaAdjuntaId?: string; // ID del archivo PDF adjunto (campo File: prefacturaAdjunta)
+  facturaIds?: string[]; // IDs de archivos adjuntos (campo Attachment Multiple: factura)
+  facturaNames?: Record<string, string>; // Nombres de los archivos adjuntos (mapa ID -> Nombre)
   fechaLimiteDePago?: string; // Campo fecha para vencimiento
   recordatorio3DiasEnviado?: string; // Custom Date field for 3 days reminder
   avisoVencimientoEnviado?: string; // Custom Date field for overdue reminder
