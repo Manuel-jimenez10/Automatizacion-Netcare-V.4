@@ -117,7 +117,7 @@ class WhatsappController {
                 if (pendingXml) {
                     console.log(`✅ XML pendiente encontrado: ${pendingXml.xmlUrls.length} archivo(s) para factura "${pendingXml.invoiceName}"`);
                     // Enviar cada XML como mensaje libre (free-form media) — dentro de ventana 24h
-                    // Validar statusCallback URL para evitar error 21609
+                    // El proxy sirve XML como application/octet-stream para que Twilio lo acepte
                     let validatedCallbackUrl = undefined;
                     if (env_1.env.twilioStatusCallbackUrl) {
                         const rawUrl = env_1.env.twilioStatusCallbackUrl.trim();

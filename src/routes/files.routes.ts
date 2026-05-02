@@ -29,10 +29,19 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 
     console.log(`🌍 [PROXY] Sirviendo: ${fileName} (${contentType}, ${buffer.length} bytes)`);
 
+    // Twilio rechaza text/xml y application/xml para WhatsApp (error 63019).
+    // Servir XML como application/octet-stream para que Twilio lo acepte.
+    // WhatsApp mostrará el archivo como XML basándose en la extensión del filename.
+    let servedContentType = contentType;
+    if (contentType.includes('xml')) {
+      servedContentType = 'application/octet-stream';
+      console.log(`🔄 [PROXY] Content-Type cambiado de "${contentType}" a "application/octet-stream" (workaround Twilio)`);
+    }
+
     // Headers que Twilio necesita para descargar exitosamente
-    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Type', servedContentType);
     res.setHeader('Content-Length', buffer.length);
-    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     res.setHeader('Cache-Control', 'public, max-age=3600');
     
     res.send(buffer);
