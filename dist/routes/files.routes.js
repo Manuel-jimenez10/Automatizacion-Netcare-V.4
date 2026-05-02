@@ -9,13 +9,26 @@ router.get('/:id', async (req, res) => {
     console.log(`🌍 [PROXY] Solicitud entrante para archivo: ${fileId}`);
     console.log(`🌍 [PROXY] User-Agent: ${req.get('User-Agent')}`);
     try {
-        const response = await espoClient.getFile(fileId);
-        // Set headers from the original response if available, or default to PDF
-        // EspoCRM usually sends strict content-types
-        const contentType = response.headers['content-type'] || 'application/pdf';
+        // Usar getFileAsBuffer (más robusto que streaming para Twilio)
+        const response = await espoClient.getFileAsBuffer(fileId);
+        const buffer = Buffer.from(response.data);
+        const contentType = response.headers['content-type'] || 'application/octet-stream';
+        // Extraer filename del header Content-Disposition si EspoCRM lo envía
+        let fileName = `file_${fileId}`;
+        const disposition = response.headers['content-disposition'];
+        if (disposition) {
+            const match = disposition.match(/filename[^;=\n]*=(?:.*''|"?)([^";\n]*)/i);
+            if (match && match[1]) {
+                fileName = match[1];
+            }
+        }
+        console.log(`🌍 [PROXY] Sirviendo: ${fileName} (${contentType}, ${buffer.length} bytes)`);
+        // Headers que Twilio necesita para descargar exitosamente
         res.setHeader('Content-Type', contentType);
-        // Pipe the stream to the response
-        response.data.pipe(res);
+        res.setHeader('Content-Length', buffer.length);
+        res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.send(buffer);
     }
     catch (error) {
         console.error(`Error sirviendo archivo ${fileId}:`, error.message);

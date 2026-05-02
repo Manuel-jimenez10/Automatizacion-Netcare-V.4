@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendDynamicTemplateMessage = exports.sendPrefacturaReminderMessage = exports.sendMediaMessage = exports.sendTextMessage = exports.sendInvoiceConfirmedMessage = exports.sendQuotePresentedMessage = exports.sendQuoteFollowUpMessage = void 0;
+exports.sendDynamicTemplateMessage = exports.sendPrefacturaReminderMessage = exports.sendMediaMessage = exports.sendTextMessage = exports.sendFacturaXmlButtonMessage = exports.sendFacturaAdicionalMessage = exports.sendFacturaPresentedMessage = exports.sendInvoiceConfirmedMessage = exports.sendQuotePresentedMessage = exports.sendQuoteFollowUpMessage = void 0;
 const twilio_1 = __importDefault(require("twilio"));
 const env_1 = require("../config/env");
 const client = (0, twilio_1.default)(env_1.env.twilioAccountSid, env_1.env.twilioAuthToken);
@@ -217,6 +217,140 @@ const sendInvoiceConfirmedMessage = async ({ phone, clientName, invoiceName, pdf
     }
 };
 exports.sendInvoiceConfirmedMessage = sendInvoiceConfirmedMessage;
+const sendFacturaPresentedMessage = async ({ phone, clientName, invoiceName, pdfUrl, }) => {
+    if (!phone)
+        throw new Error('El número de teléfono es requerido');
+    if (!env_1.env.facturaPresentedTemplateSid)
+        throw new Error('FACTURA_PRESENTED no configurado en .env');
+    const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
+    const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
+    console.log(`📱 Enviando WhatsApp de Factura Sola a: ${formattedPhone}`);
+    try {
+        const variables = {
+            1: clientName || 'Cliente', // Variable {{1}} es NOMBRE
+            2: invoiceName, // Variable {{2}} es PREFACTURA/FACTURA nombre
+            3: pdfUrl || '', // Variable {{3}} es MEDIA (PDF)
+        };
+        console.log(`📦 Variables enviadas a Twilio:`, JSON.stringify(variables));
+        let validatedCallbackUrl = undefined;
+        if (env_1.env.twilioStatusCallbackUrl) {
+            const rawUrl = env_1.env.twilioStatusCallbackUrl.trim();
+            const hasProtocol = rawUrl.startsWith('https://') || rawUrl.startsWith('http://');
+            const hasDoubleUrl = /https?:\/\/.*https?:\/\//.test(rawUrl);
+            const hasSpace = /\s/.test(rawUrl);
+            const hasUnderscore = /:\/\/[^/]*_/.test(rawUrl);
+            if (hasProtocol && !hasDoubleUrl && !hasSpace && !hasUnderscore) {
+                validatedCallbackUrl = rawUrl;
+            }
+        }
+        const messageParams = {
+            from: env_1.env.twilioWhatsappFrom,
+            to: `whatsapp:${formattedPhone}`,
+            contentSid: env_1.env.facturaPresentedTemplateSid,
+            contentVariables: JSON.stringify(variables),
+        };
+        if (validatedCallbackUrl) {
+            messageParams.statusCallback = validatedCallbackUrl;
+        }
+        const message = await client.messages.create(messageParams);
+        console.log(`✅ Mensaje de Factura enviado exitosamente`);
+        console.log(`   - SID: ${message.sid}`);
+        return message;
+    }
+    catch (error) {
+        console.error('❌ Error enviando WhatsApp de Factura Sola:', error.message);
+        throw error;
+    }
+};
+exports.sendFacturaPresentedMessage = sendFacturaPresentedMessage;
+const sendFacturaAdicionalMessage = async ({ phone, pdfUrl, }) => {
+    if (!phone)
+        throw new Error('El número de teléfono es requerido');
+    if (!env_1.env.facturaAdicionalTemplateSid)
+        throw new Error('FACTURA_ADICIONAL no configurado en .env');
+    const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
+    const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
+    console.log(`📱 Enviando WhatsApp de Factura Adicional a: ${formattedPhone}`);
+    try {
+        const variables = {
+            1: pdfUrl || '', // Variable {{1}} es MEDIA (PDF)
+        };
+        console.log(`📦 Variables enviadas a Twilio:`, JSON.stringify(variables));
+        let validatedCallbackUrl = undefined;
+        if (env_1.env.twilioStatusCallbackUrl) {
+            const rawUrl = env_1.env.twilioStatusCallbackUrl.trim();
+            const hasProtocol = rawUrl.startsWith('https://') || rawUrl.startsWith('http://');
+            const hasDoubleUrl = /https?:\/\/.*https?:\/\//.test(rawUrl);
+            const hasSpace = /\s/.test(rawUrl);
+            const hasUnderscore = /:\/\/[^/]*_/.test(rawUrl);
+            if (hasProtocol && !hasDoubleUrl && !hasSpace && !hasUnderscore) {
+                validatedCallbackUrl = rawUrl;
+            }
+        }
+        const messageParams = {
+            from: env_1.env.twilioWhatsappFrom,
+            to: `whatsapp:${formattedPhone}`,
+            contentSid: env_1.env.facturaAdicionalTemplateSid,
+            contentVariables: JSON.stringify(variables),
+        };
+        if (validatedCallbackUrl) {
+            messageParams.statusCallback = validatedCallbackUrl;
+        }
+        const message = await client.messages.create(messageParams);
+        console.log(`✅ Mensaje de Factura Adicional enviado exitosamente`);
+        console.log(`   - SID: ${message.sid}`);
+        return message;
+    }
+    catch (error) {
+        console.error('❌ Error enviando WhatsApp de Factura Adicional:', error.message);
+        throw error;
+    }
+};
+exports.sendFacturaAdicionalMessage = sendFacturaAdicionalMessage;
+const sendFacturaXmlButtonMessage = async ({ phone, invoiceName, }) => {
+    if (!phone)
+        throw new Error('El número de teléfono es requerido');
+    if (!env_1.env.facturaPresentedXmlSid)
+        throw new Error('FACTURA_PRESENTED_XML no configurado en .env');
+    const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
+    const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
+    console.log(`📱 Enviando Quick Reply "Solicitar mi XML" a: ${formattedPhone}`);
+    try {
+        const variables = {
+            1: invoiceName, // Variable {{1}} es el nombre de la factura
+        };
+        console.log(`📦 Variables enviadas a Twilio (Quick Reply XML):`, JSON.stringify(variables));
+        let validatedCallbackUrl = undefined;
+        if (env_1.env.twilioStatusCallbackUrl) {
+            const rawUrl = env_1.env.twilioStatusCallbackUrl.trim();
+            const hasProtocol = rawUrl.startsWith('https://') || rawUrl.startsWith('http://');
+            const hasDoubleUrl = /https?:\/\/.*https?:\/\//.test(rawUrl);
+            const hasSpace = /\s/.test(rawUrl);
+            const hasUnderscore = /:\/\/[^/]*_/.test(rawUrl);
+            if (hasProtocol && !hasDoubleUrl && !hasSpace && !hasUnderscore) {
+                validatedCallbackUrl = rawUrl;
+            }
+        }
+        const messageParams = {
+            from: env_1.env.twilioWhatsappFrom,
+            to: `whatsapp:${formattedPhone}`,
+            contentSid: env_1.env.facturaPresentedXmlSid,
+            contentVariables: JSON.stringify(variables),
+        };
+        if (validatedCallbackUrl) {
+            messageParams.statusCallback = validatedCallbackUrl;
+        }
+        const message = await client.messages.create(messageParams);
+        console.log(`✅ Quick Reply "Solicitar mi XML" enviado exitosamente`);
+        console.log(`   - SID: ${message.sid}`);
+        return message;
+    }
+    catch (error) {
+        console.error('❌ Error enviando Quick Reply de XML:', error.message);
+        throw error;
+    }
+};
+exports.sendFacturaXmlButtonMessage = sendFacturaXmlButtonMessage;
 const sendTextMessage = async ({ phone, text, statusCallback, }) => {
     if (!phone)
         throw new Error('El número de teléfono es requerido');
