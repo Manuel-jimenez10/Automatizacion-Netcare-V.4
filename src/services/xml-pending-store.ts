@@ -1,23 +1,32 @@
 /**
  * Almacén en memoria para XMLs pendientes de entrega.
  * 
- * Cuando se envía una factura con XML adjunto, el XML se guarda aquí
- * vinculado al teléfono del cliente. Cuando el cliente presiona el botón
- * "Solicitar mi XML", el sistema busca aquí el XML pendiente y lo envía.
+ * Incluye CACHE de los archivos (buffers) para servir instantáneamente
+ * cuando Twilio los solicita (evitar timeout de ~2s de Twilio).
  * 
  * TTL: 72 horas (se auto-limpia).
  */
 
-interface PendingXmlData {
-  xmlUrls: string[];       // URLs públicas del/los XML(s)
-  invoiceName: string;     // Nombre de la factura (para contexto en el mensaje)
-  phone: string;           // Teléfono del destinatario
-  timestamp: number;       // Marca de tiempo para TTL
+import crypto from 'crypto';
+
+interface CachedFile {
+  buffer: Buffer;
+  fileName: string;
+  token: string;       // Token único para la URL de cache
+}
+
+export interface PendingXmlData {
+  cachedFiles: CachedFile[];  // Archivos XML pre-descargados
+  invoiceName: string;        // Nombre de la factura
+  phone: string;              // Teléfono del destinatario
+  timestamp: number;          // Marca de tiempo para TTL
 }
 
 const TTL_MS = 72 * 60 * 60 * 1000; // 72 horas
 
 const pendingXmlMap = new Map<string, PendingXmlData>();
+// Cache rápido: token → buffer (para servir sin latencia)
+const tokenCache = new Map<string, { buffer: Buffer; fileName: string }>();
 
 /**
  * Normaliza el teléfono a solo dígitos para consistencia en el Map.
@@ -26,37 +35,52 @@ const normalizePhone = (phone: string): string => {
   return phone.replace(/\D/g, '');
 };
 
+/**
+ * Genera un token único para una URL de cache.
+ */
+const generateToken = (): string => {
+  return crypto.randomBytes(16).toString('hex');
+};
+
 export const xmlPendingStore = {
 
   /**
-   * Guarda XML(s) pendiente(s) para un teléfono.
+   * Guarda XML(s) pendiente(s) con sus buffers pre-descargados.
    */
-  set(phone: string, xmlUrls: string[], invoiceName: string): void {
+  set(phone: string, files: { buffer: Buffer; fileName: string }[], invoiceName: string): void {
     const key = normalizePhone(phone);
+
+    // Generar tokens y cachear cada archivo
+    const cachedFiles: CachedFile[] = files.map(f => {
+      const token = generateToken();
+      tokenCache.set(token, { buffer: f.buffer, fileName: f.fileName });
+      return { buffer: f.buffer, fileName: f.fileName, token };
+    });
+
     pendingXmlMap.set(key, {
-      xmlUrls,
+      cachedFiles,
       invoiceName,
       phone,
       timestamp: Date.now(),
     });
-    console.log(`📦 [XML Store] Guardado XML pendiente para ${key} (${xmlUrls.length} archivo(s), factura: ${invoiceName})`);
+
+    console.log(`📦 [XML Store] Guardado XML pendiente para ${key} (${cachedFiles.length} archivo(s), factura: ${invoiceName})`);
+    cachedFiles.forEach(f => console.log(`   📄 Token: ${f.token} → ${f.fileName} (${f.buffer.length} bytes)`));
   },
 
   /**
    * Obtiene los XMLs pendientes para un teléfono.
-   * Retorna undefined si no hay datos o si expiraron (TTL).
    */
   get(phone: string): PendingXmlData | undefined {
     const key = normalizePhone(phone);
     const data = pendingXmlMap.get(key);
 
-    if (!data) {
-      return undefined;
-    }
+    if (!data) return undefined;
 
     // Verificar TTL
     if (Date.now() - data.timestamp > TTL_MS) {
       console.log(`⏰ [XML Store] XML pendiente para ${key} expiró (TTL 72h). Eliminando...`);
+      data.cachedFiles.forEach(f => tokenCache.delete(f.token));
       pendingXmlMap.delete(key);
       return undefined;
     }
@@ -65,12 +89,23 @@ export const xmlPendingStore = {
   },
 
   /**
-   * Elimina los XMLs pendientes para un teléfono (después de enviarlos).
+   * Obtiene un archivo cacheado por su token (para servir a Twilio instantáneamente).
+   */
+  getByToken(token: string): { buffer: Buffer; fileName: string } | undefined {
+    return tokenCache.get(token);
+  },
+
+  /**
+   * Elimina la entrada pendiente del teléfono (después de enviar el link),
+   * pero MANTIENE los tokens en tokenCache para que el usuario pueda
+   * acceder al link incluso después de que el bot de Facebook haga preview.
+   * Los tokens expiran solos con el TTL de 72h.
    */
   remove(phone: string): void {
     const key = normalizePhone(phone);
     pendingXmlMap.delete(key);
-    console.log(`🗑️ [XML Store] Eliminado XML pendiente para ${key}`);
+    // NO borrar tokenCache aquí — el usuario aún necesita acceder al link
+    console.log(`🗑️ [XML Store] Eliminado XML pendiente para ${key} (tokens de cache mantenidos por TTL)`);
   },
 
   /**
@@ -81,6 +116,7 @@ export const xmlPendingStore = {
     let cleaned = 0;
     for (const [key, data] of pendingXmlMap) {
       if (now - data.timestamp > TTL_MS) {
+        data.cachedFiles.forEach(f => tokenCache.delete(f.token));
         pendingXmlMap.delete(key);
         cleaned++;
       }
@@ -90,9 +126,6 @@ export const xmlPendingStore = {
     }
   },
 
-  /**
-   * Cantidad de entradas activas (para diagnóstico).
-   */
   size(): number {
     return pendingXmlMap.size;
   },

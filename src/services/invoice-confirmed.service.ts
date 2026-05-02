@@ -94,15 +94,43 @@ export class InvoiceConfirmedService {
         throw new Error(`La Prefactura "${invoice.name}" no tiene ningún archivo PDF adjunto (ni prefactura ni factura).`);
       }
 
-      // Generar URLs Públicas
+      // Generar URLs Públicas para PDFs
       const prefacturaUrl = hasPrefactura ? `${env.publicUrl}/api/files/${prefacturaPdfId}` : undefined;
       const facturaPdfUrls = facturaPdfIds.map(id => `${env.publicUrl}/api/files/${id}`);
-      const facturaXmlUrls = facturaXmlIds.map(id => `${env.publicUrl}/api/files/${id}`);
 
-      // 7. Si hay XMLs, guardarlos en el store pendiente para cuando el cliente presione el botón
+      // 7. Si hay XMLs, PRE-DESCARGARLOS y guardarlos en cache para servir instantáneamente
       if (hasXml) {
-        xmlPendingStore.set(phoneValidation.formattedNumber!, facturaXmlUrls, invoice.name);
-        console.log(`📦 XML(s) guardado(s) en store pendiente para entrega bajo demanda`);
+        console.log(`📥 Pre-descargando ${facturaXmlIds.length} archivo(s) XML desde EspoCRM...`);
+        
+        const xmlFiles: { buffer: Buffer; fileName: string }[] = [];
+        
+        for (const xmlId of facturaXmlIds) {
+          try {
+            const fileResponse = await this.espoCRMClient.getFileAsBuffer(xmlId);
+            const buffer = Buffer.from(fileResponse.data);
+            
+            // Extraer filename
+            let fileName = `factura_${xmlId}.xml`;
+            const disposition = fileResponse.headers['content-disposition'];
+            if (disposition) {
+              const match = disposition.match(/filename[^;=\n]*=(?:.*''|"?)([^";\n]*)/i);
+              if (match && match[1]) {
+                fileName = match[1];
+              }
+            }
+            
+            xmlFiles.push({ buffer, fileName });
+            console.log(`   ✅ XML descargado: ${fileName} (${buffer.length} bytes)`);
+          } catch (dlErr: any) {
+            console.error(`   ❌ Error descargando XML ${xmlId}:`, dlErr.message);
+          }
+        }
+        
+        if (xmlFiles.length > 0) {
+          // Guardar en store con buffers (genera tokens automáticamente)
+          xmlPendingStore.set(phoneValidation.formattedNumber!, xmlFiles, invoice.name);
+          console.log(`📦 XML(s) pre-descargado(s) y cacheado(s) en memoria`);
+        }
       }
 
       // 8. Lógica de Árbol (T1, T2, T3) y Envío de WhatsApp — SOLO PDFs en templates
