@@ -30,6 +30,7 @@ export const env = {
   prefacturaConfirmedTemplateSid: process.env.PREFACTURA_PRESENTED || '',
   facturaPresentedTemplateSid: process.env.FACTURA_PRESENTED || '',
   facturaAdicionalTemplateSid: process.env.FACTURA_ADICIONAL || '',
+  facturaPresentedXmlSid: process.env.FACTURA_PRESENTED_XML || '', // Template Quick Reply: "Solicitar mi XML"
   prefacturaReminder3DaysSid: process.env.TWILIO_PREFACTURA_REMINDER_3DAYS_SID || '',
   prefacturaReminderOverdueSid: process.env.TWILIO_PREFACTURA_REMINDER_OVERDUE_SID || '',
   mensajeIniciarWhatsapp: process.env.MENSAJE_INICIAR_WHATSAPP || '',

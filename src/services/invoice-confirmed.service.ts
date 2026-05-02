@@ -1,8 +1,9 @@
 import { EspoCRMClient } from './espocrm-api-client.service';
-import { sendInvoiceConfirmedMessage, sendFacturaPresentedMessage, sendFacturaAdicionalMessage } from './twilio.service';
+import { sendInvoiceConfirmedMessage, sendFacturaPresentedMessage, sendFacturaAdicionalMessage, sendFacturaXmlButtonMessage } from './twilio.service';
 import { env } from '../config/env';
 import { EspoCRMInvoice } from '../interfaces/interfaces';
 import { extractAndValidatePhone } from '../utils/phone-utils';
+import { xmlPendingStore } from './xml-pending-store';
 
 export class InvoiceConfirmedService {
   private espoCRMClient: EspoCRMClient;
@@ -15,9 +16,10 @@ export class InvoiceConfirmedService {
    * Maneja el evento de Prefactura Confirmada (Webhook)
    * 1. Obtiene la Invoice (Prefactura)
    * 2. Valida Contacto de Facturación y Teléfono
-   * 3. Obtiene URL del PDF
-   * 4. Envía WhatsApp con Template
-   * 5. Registra el mensaje en EspoCRM
+   * 3. Separa archivos PDF de XML en el campo Factura
+   * 4. Envía Templates de WhatsApp (solo PDFs en templates)
+   * 5. Si hay XML, envía Quick Reply "Solicitar mi XML" y guarda XML pendiente
+   * 6. Registra el mensaje en EspoCRM
    */
   async handleInvoiceConfirmed(invoiceId: string): Promise<void> {
     console.log('\n🚀 ============================================');
@@ -55,45 +57,60 @@ export class InvoiceConfirmedService {
       const clientName = contact.name || contact.firstName || 'Cliente';
       console.log(`👤 Cliente: ${clientName}`);
 
-      // 6. Manejo de PDFs (Prefactura y Factura)
+      // 6. Manejo de archivos (Prefactura y Factura) — SEPARAR PDFs de XMLs
       const prefacturaPdfId = invoice.prefacturaAdjuntaId;
       const hasPrefactura = !!prefacturaPdfId;
 
-      let facturaPdfId: string | undefined = undefined;
-      // Extraer el PDF del campo múltiple "Factura"
-      if (invoice.facturaIds && invoice.facturaNames) {
-        for (const id of invoice.facturaIds) {
-          const fileName = invoice.facturaNames[id] || '';
-          if (fileName.toLowerCase().endsWith('.pdf')) {
-            facturaPdfId = id;
-            break;
+      let facturaPdfIds: string[] = [];
+      let facturaXmlIds: string[] = [];
+
+      // Extraer archivos del campo múltiple "Factura" y separarlos por tipo
+      if (invoice.facturaIds) {
+        if (invoice.facturaNames) {
+          for (const id of invoice.facturaIds) {
+            const fileName = invoice.facturaNames[id] || '';
+            const lowerName = fileName.toLowerCase();
+            if (lowerName.endsWith('.pdf')) {
+              facturaPdfIds.push(id);
+            } else if (lowerName.endsWith('.xml')) {
+              facturaXmlIds.push(id);
+            }
           }
+        } else {
+          // Fallback: si no hay nombres, asumir que todos son PDFs
+          facturaPdfIds = [...invoice.facturaIds];
         }
       }
-      // Fallback si EspoCRM no retorna facturaNames pero sí IDs
-      if (!facturaPdfId && invoice.facturaIds && invoice.facturaIds.length > 0 && !invoice.facturaNames) {
-         facturaPdfId = invoice.facturaIds[0];
-      }
 
-      const hasFactura = !!facturaPdfId;
+      const hasFacturaPdf = facturaPdfIds.length > 0;
+      const hasXml = facturaXmlIds.length > 0;
 
-      if (!hasPrefactura && !hasFactura) {
-        throw new Error(`La Prefactura "${invoice.name}" no tiene ningún PDF adjunto (ni prefactura ni factura).`);
+      console.log(`📎 Resumen de archivos detectados:`);
+      console.log(`   - Prefactura: ${hasPrefactura ? `Sí (ID: ${prefacturaPdfId})` : 'No'}`);
+      console.log(`   - Factura PDFs: ${facturaPdfIds.length} archivo(s) ${facturaPdfIds.length > 0 ? `(IDs: ${facturaPdfIds.join(', ')})` : ''}`);
+      console.log(`   - Factura XMLs: ${facturaXmlIds.length} archivo(s) ${facturaXmlIds.length > 0 ? `(IDs: ${facturaXmlIds.join(', ')})` : ''}`);
+
+      if (!hasPrefactura && !hasFacturaPdf) {
+        throw new Error(`La Prefactura "${invoice.name}" no tiene ningún archivo PDF adjunto (ni prefactura ni factura).`);
       }
 
       // Generar URLs Públicas
       const prefacturaUrl = hasPrefactura ? `${env.publicUrl}/api/files/${prefacturaPdfId}` : undefined;
-      const facturaUrl = hasFactura ? `${env.publicUrl}/api/files/${facturaPdfId}` : undefined;
+      const facturaPdfUrls = facturaPdfIds.map(id => `${env.publicUrl}/api/files/${id}`);
+      const facturaXmlUrls = facturaXmlIds.map(id => `${env.publicUrl}/api/files/${id}`);
 
-      if (hasPrefactura) console.log(`📎 Prefactura PDF detectada. ID: ${prefacturaPdfId}`);
-      if (hasFactura) console.log(`📎 Factura PDF detectada. ID: ${facturaPdfId}`);
+      // 7. Si hay XMLs, guardarlos en el store pendiente para cuando el cliente presione el botón
+      if (hasXml) {
+        xmlPendingStore.set(phoneValidation.formattedNumber!, facturaXmlUrls, invoice.name);
+        console.log(`📦 XML(s) guardado(s) en store pendiente para entrega bajo demanda`);
+      }
 
-      // 7. Lógica de Árbol (T1, T2, T3) y Envío de WhatsApp
+      // 8. Lógica de Árbol (T1, T2, T3) y Envío de WhatsApp — SOLO PDFs en templates
       let twilioResponse: any;
 
-      if (hasPrefactura && hasFactura) {
-         // CASO T1: Ambas
-         console.log('📱 Enviando T1: Template Prefactura Normal + Template Factura Adicional...');
+      if (hasPrefactura && hasFacturaPdf) {
+         // CASO T1: Prefactura + Factura(s) PDF
+         console.log('📱 Enviando T1: Template Prefactura + Template(s) Factura PDF...');
          
          // 1er Envío: Prefactura
          twilioResponse = await sendInvoiceConfirmedMessage({
@@ -103,14 +120,27 @@ export class InvoiceConfirmedService {
            pdfUrl: prefacturaUrl,
          });
 
-         // 2do Envío: Factura Adicional
-         await sendFacturaAdicionalMessage({
-           phone: phoneValidation.formattedNumber!,
-           pdfUrl: facturaUrl,
-         });
+         // Envíos de Facturas (solo PDFs)
+         for (const fUrl of facturaPdfUrls) {
+           await new Promise(resolve => setTimeout(resolve, 1500));
+           await sendFacturaAdicionalMessage({
+             phone: phoneValidation.formattedNumber!,
+             pdfUrl: fUrl,
+           });
+         }
 
-      } else if (hasPrefactura && !hasFactura) {
-         // CASO T3: Solo Prefactura
+         // Si hay XML → enviar Quick Reply "Solicitar mi XML" (delay largo para que los PDFs lleguen primero)
+         if (hasXml) {
+           await new Promise(resolve => setTimeout(resolve, 3000));
+           console.log('📱 Enviando Quick Reply "Solicitar mi XML" (después de PDFs)...');
+           await sendFacturaXmlButtonMessage({
+             phone: phoneValidation.formattedNumber!,
+             invoiceName: invoice.name,
+           });
+         }
+
+      } else if (hasPrefactura && !hasFacturaPdf) {
+         // CASO T3: Solo Prefactura (sin factura)
          console.log('📱 Enviando T3: Solo Template Prefactura Normal...');
          twilioResponse = await sendInvoiceConfirmedMessage({
            phone: phoneValidation.formattedNumber!,
@@ -119,22 +149,46 @@ export class InvoiceConfirmedService {
            pdfUrl: prefacturaUrl,
          });
 
-      } else if (!hasPrefactura && hasFactura) {
-         // CASO T2: Solo Factura
+      } else if (!hasPrefactura && hasFacturaPdf) {
+         // CASO T2: Solo Factura(s) PDF
          console.log('📱 Enviando T2: Solo Template Factura Sola...');
+         
+         // El primer PDF se manda con sendFacturaPresentedMessage
          twilioResponse = await sendFacturaPresentedMessage({
            phone: phoneValidation.formattedNumber!,
            clientName: clientName,
            invoiceName: invoice.name,
-           pdfUrl: facturaUrl,
+           pdfUrl: facturaPdfUrls[0],
          });
+
+         // Los siguientes PDFs se mandan como Factura Adicional
+         for (let i = 1; i < facturaPdfUrls.length; i++) {
+           await new Promise(resolve => setTimeout(resolve, 1500));
+           await sendFacturaAdicionalMessage({
+             phone: phoneValidation.formattedNumber!,
+             pdfUrl: facturaPdfUrls[i],
+           });
+         }
+
+         // Si hay XML → enviar Quick Reply "Solicitar mi XML" (delay largo para que los PDFs lleguen primero)
+         if (hasXml) {
+           await new Promise(resolve => setTimeout(resolve, 3000));
+           console.log('📱 Enviando Quick Reply "Solicitar mi XML" (después de PDFs)...');
+           await sendFacturaXmlButtonMessage({
+             phone: phoneValidation.formattedNumber!,
+             invoiceName: invoice.name,
+           });
+         }
       }
 
-      // 8. Guardar mensaje en WhatsappMessage (EspoCRM)
+      // 9. Guardar mensaje en WhatsappMessage (EspoCRM)
       await this.logMessageInEspo(invoice, phoneValidation.formattedNumber!, clientName, twilioResponse);
 
       console.log('\n✅ ============================================');
       console.log('✅ Proceso de Prefactura Confirmada completado exitosamente');
+      if (hasXml) {
+        console.log('✅ XML pendiente registrado — esperando que el cliente presione "Solicitar mi XML"');
+      }
       console.log('✅ ============================================\n');
 
     } catch (error: any) {

@@ -399,6 +399,70 @@ export const sendFacturaAdicionalMessage = async ({
   }
 };
 
+// =============================================
+// FUNCIÓN PARA TEMPLATE QUICK REPLY "SOLICITAR MI XML"
+// =============================================
+
+interface FacturaXmlButtonParams {
+  phone: string;
+  invoiceName: string;
+}
+
+export const sendFacturaXmlButtonMessage = async ({
+  phone,
+  invoiceName,
+}: FacturaXmlButtonParams) => {
+  if (!phone) throw new Error('El número de teléfono es requerido');
+  if (!env.facturaPresentedXmlSid) throw new Error('FACTURA_PRESENTED_XML no configurado en .env');
+
+  const cleanedPhone = phone.replace(/\s+/g, '').replace(/[^\d+]/g, '');
+  const formattedPhone = cleanedPhone.startsWith('+') ? cleanedPhone : `+${cleanedPhone}`;
+
+  console.log(`📱 Enviando Quick Reply "Solicitar mi XML" a: ${formattedPhone}`);
+
+  try {
+    const variables = {
+      1: invoiceName,  // Variable {{1}} es el nombre de la factura
+    };
+
+    console.log(`📦 Variables enviadas a Twilio (Quick Reply XML):`, JSON.stringify(variables));
+
+    let validatedCallbackUrl: string | undefined = undefined;
+
+    if (env.twilioStatusCallbackUrl) {
+      const rawUrl = env.twilioStatusCallbackUrl.trim();
+      const hasProtocol = rawUrl.startsWith('https://') || rawUrl.startsWith('http://');
+      const hasDoubleUrl = /https?:\/\/.*https?:\/\//.test(rawUrl);
+      const hasSpace = /\s/.test(rawUrl);
+      const hasUnderscore = /:\/\/[^/]*_/.test(rawUrl);
+
+      if (hasProtocol && !hasDoubleUrl && !hasSpace && !hasUnderscore) {
+        validatedCallbackUrl = rawUrl;
+      }
+    }
+
+    const messageParams: any = {
+      from: env.twilioWhatsappFrom,
+      to: `whatsapp:${formattedPhone}`,
+      contentSid: env.facturaPresentedXmlSid,
+      contentVariables: JSON.stringify(variables),
+    };
+
+    if (validatedCallbackUrl) {
+      messageParams.statusCallback = validatedCallbackUrl;
+    }
+
+    const message = await client.messages.create(messageParams);
+
+    console.log(`✅ Quick Reply "Solicitar mi XML" enviado exitosamente`);
+    console.log(`   - SID: ${message.sid}`);
+    return message;
+  } catch (error: any) {
+    console.error('❌ Error enviando Quick Reply de XML:', error.message);
+    throw error;
+  }
+};
+
 interface SendTextParams {
   phone: string;
   text: string;

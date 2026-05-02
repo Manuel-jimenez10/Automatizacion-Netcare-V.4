@@ -74,7 +74,107 @@ export class WhatsappController {
       // Cleanup Phone (Twilio sends whatsapp:+123456)
       const phone = From.replace('whatsapp:', '');
 
+      // =============================================
+      // DETECCIÓN DE QUICK REPLY: "Solicitar mi XML"
+      // =============================================
+      // Cuando el cliente presiona el botón "Solicitar mi XML" en WhatsApp,
+      // Twilio envía el texto del botón como Body del mensaje entrante.
+      // Detectamos esto y enviamos el XML como mensaje libre (free-form).
+      const buttonPayload = req.body.ButtonPayload || '';
+      const isXmlRequest = (
+        (Body && Body.trim().toLowerCase() === 'solicitar mi xml') ||
+        buttonPayload === 'solicitar_xml'
+      );
 
+      if (isXmlRequest) {
+        console.log(`\n📎 ============================================`);
+        console.log(`📎 Quick Reply "Solicitar mi XML" detectado de: ${phone}`);
+        console.log(`📎 ============================================\n`);
+
+        const { xmlPendingStore } = await import('../services/xml-pending-store');
+        const { sendMediaMessage } = await import('../services/twilio.service');
+
+        const pendingXml = xmlPendingStore.get(phone);
+
+        if (pendingXml) {
+          console.log(`✅ XML pendiente encontrado: ${pendingXml.xmlUrls.length} archivo(s) para factura "${pendingXml.invoiceName}"`);
+
+          // Enviar cada XML como mensaje libre (free-form media) — dentro de ventana 24h
+          // Validar statusCallback URL para evitar error 21609
+          let validatedCallbackUrl: string | undefined = undefined;
+          if (env.twilioStatusCallbackUrl) {
+            const rawUrl = env.twilioStatusCallbackUrl.trim();
+            const hasProtocol = rawUrl.startsWith('https://') || rawUrl.startsWith('http://');
+            const hasDoubleUrl = /https?:\/\/.*https?:\/\//.test(rawUrl);
+            const hasSpace = /\s/.test(rawUrl);
+            const hasUnderscore = /:\/\/[^/]*_/.test(rawUrl);
+            if (hasProtocol && !hasDoubleUrl && !hasSpace && !hasUnderscore) {
+              validatedCallbackUrl = rawUrl;
+            }
+          }
+
+          for (const xmlUrl of pendingXml.xmlUrls) {
+            try {
+              await sendMediaMessage({
+                phone,
+                mediaUrls: [xmlUrl],
+                body: `📎 Aquí está el XML de tu factura: ${pendingXml.invoiceName}`,
+                statusCallback: validatedCallbackUrl,
+              });
+              console.log(`✅ XML enviado exitosamente: ${xmlUrl}`);
+            } catch (xmlErr: any) {
+              console.error(`❌ Error enviando XML ${xmlUrl}:`, xmlErr.message);
+            }
+          }
+
+          // Limpiar del store
+          xmlPendingStore.remove(phone);
+
+          // Registrar en EspoCRM (el botón presionado + XML enviado)
+          try {
+            // Buscar conversación existente para este teléfono
+            const convSearch = await espoClient.searchEntities('WhatsappConverstion', [
+              { type: 'contains', attribute: 'name', value: phone.replace(/\D/g, '').slice(-7) }
+            ]);
+            const normalizedPhone = phone.replace(/\D/g, '');
+            const matchedConv = convSearch.find((c: any) => {
+              const cPhone = c.name.replace(/\D/g, '');
+              return cPhone.endsWith(normalizedPhone) || normalizedPhone.endsWith(cPhone);
+            });
+
+            if (matchedConv) {
+              // Guardar el mensaje entrante (botón presionado)
+              await espoClient.createEntity('WhatsappMessage', {
+                name: phone,
+                status: 'Delivered',
+                type: 'In',
+                description: 'Solicitar mi XML',
+                messageSid: MessageSid,
+                isRead: true,
+                whatsappConverstionId: matchedConv.id,
+              });
+
+              // Actualizar conversación
+              await espoClient.updateEntity('WhatsappConverstion', matchedConv.id, {
+                description: `📎 XML enviado: ${pendingXml.invoiceName}`,
+                fechaHoraUltimoMensaje: new Date().toISOString().slice(0, 19).replace('T', ' '),
+              });
+            }
+          } catch (logErr: any) {
+            console.warn(`⚠️ Error registrando Quick Reply en EspoCRM (XML sí se envió):`, logErr.message);
+          }
+
+          console.log(`\n✅ Proceso de entrega de XML completado para ${phone}\n`);
+        } else {
+          console.log(`⚠️ No hay XML pendiente para ${phone}. Posiblemente ya fue enviado o expiró.`);
+        }
+
+        res.status(200).send('<Response></Response>');
+        return; // Short-circuit: no procesar como mensaje normal
+      }
+      // =============================================
+      // FIN DETECCIÓN QUICK REPLY
+      // =============================================
 
       // 1. Buscar o Crear Conversación
       // Asumimos que podemos buscar por nombre (teléfono) o tenemos un campo phone
