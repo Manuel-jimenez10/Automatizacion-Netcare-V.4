@@ -115,9 +115,11 @@ class WhatsappController {
                 const { sendMediaMessage } = await Promise.resolve().then(() => __importStar(require('../services/twilio.service')));
                 const pendingXml = xmlPendingStore.get(phone);
                 if (pendingXml) {
-                    console.log(`✅ XML pendiente encontrado: ${pendingXml.xmlUrls.length} archivo(s) para factura "${pendingXml.invoiceName}"`);
-                    // Enviar cada XML como mensaje libre (free-form media) — dentro de ventana 24h
-                    // El proxy sirve XML como application/octet-stream para que Twilio lo acepte
+                    console.log(`✅ XML pendiente encontrado: ${pendingXml.cachedFiles.length} archivo(s) para factura "${pendingXml.invoiceName}"`);
+                    // ⚠️ Twilio NO soporta XML como media adjunta en WhatsApp (error 63019).
+                    // Tipos soportados: PDF, DOC, DOCX, PPTX, XLSX únicamente.
+                    // Solución: enviar mensaje de texto con link de descarga directa.
+                    // El endpoint /api/xml-cache/:token sirve el archivo desde memoria (~0ms).
                     let validatedCallbackUrl = undefined;
                     if (env_1.env.twilioStatusCallbackUrl) {
                         const rawUrl = env_1.env.twilioStatusCallbackUrl.trim();
@@ -129,19 +131,24 @@ class WhatsappController {
                             validatedCallbackUrl = rawUrl;
                         }
                     }
-                    for (const xmlUrl of pendingXml.xmlUrls) {
-                        try {
-                            await sendMediaMessage({
-                                phone,
-                                mediaUrls: [xmlUrl],
-                                body: `📎 Aquí está el XML de tu factura: ${pendingXml.invoiceName}`,
-                                statusCallback: validatedCallbackUrl,
-                            });
-                            console.log(`✅ XML enviado exitosamente: ${xmlUrl}`);
-                        }
-                        catch (xmlErr) {
-                            console.error(`❌ Error enviando XML ${xmlUrl}:`, xmlErr.message);
-                        }
+                    // Construir links de descarga con tokens de cache
+                    const downloadLinks = pendingXml.cachedFiles.map(f => {
+                        const cacheUrl = `${env_1.env.publicUrl}/api/xml-cache/${f.token}`;
+                        return `📄 ${f.fileName}\n${cacheUrl}`;
+                    }).join('\n\n');
+                    const textMessage = `📎 *XML de tu factura: ${pendingXml.invoiceName}*\n\nDescarga tu archivo XML aquí:\n\n${downloadLinks}\n\n_Toca el enlace para descargar._`;
+                    let xmlMsgSid;
+                    try {
+                        const xmlMsgResult = await (0, twilio_service_1.sendTextMessage)({
+                            phone,
+                            text: textMessage,
+                            statusCallback: validatedCallbackUrl,
+                        });
+                        xmlMsgSid = xmlMsgResult?.sid;
+                        console.log(`✅ Link de descarga de XML enviado exitosamente (SID: ${xmlMsgSid})`);
+                    }
+                    catch (xmlErr) {
+                        console.error(`❌ Error enviando link de XML:`, xmlErr.message);
                     }
                     // Limpiar del store
                     xmlPendingStore.remove(phone);
@@ -157,7 +164,7 @@ class WhatsappController {
                             return cPhone.endsWith(normalizedPhone) || normalizedPhone.endsWith(cPhone);
                         });
                         if (matchedConv) {
-                            // Guardar el mensaje entrante (botón presionado)
+                            // 1. Guardar el mensaje entrante (botón presionado por el cliente)
                             await espoClient.createEntity('WhatsappMessage', {
                                 name: phone,
                                 status: 'Delivered',
@@ -167,9 +174,19 @@ class WhatsappController {
                                 isRead: true,
                                 whatsappConverstionId: matchedConv.id,
                             });
-                            // Actualizar conversación
+                            // 2. Guardar el mensaje saliente (link de descarga del XML enviado)
+                            await espoClient.createEntity('WhatsappMessage', {
+                                name: phone,
+                                status: 'Sent',
+                                type: 'Out',
+                                description: textMessage,
+                                messageSid: xmlMsgSid || `xml_link_${Date.now()}`,
+                                isRead: false,
+                                whatsappConverstionId: matchedConv.id,
+                            });
+                            // 3. Actualizar conversación con el último mensaje
                             await espoClient.updateEntity('WhatsappConverstion', matchedConv.id, {
-                                description: `📎 XML enviado: ${pendingXml.invoiceName}`,
+                                description: textMessage,
                                 fechaHoraUltimoMensaje: new Date().toISOString().slice(0, 19).replace('T', ' '),
                             });
                         }
