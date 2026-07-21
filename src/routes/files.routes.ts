@@ -4,7 +4,7 @@ import { EspoCRMClient } from '../services/espocrm-api-client.service';
 const router = Router();
 const espoClient = new EspoCRMClient();
 
-router.get('/:id', async (req: Request, res: Response): Promise<void> => {
+const serveFile = async (req: Request, res: Response): Promise<void> => {
   const fileId = req.params.id;
 
   console.log(`🌍 [PROXY] Solicitud entrante para archivo: ${fileId}`);
@@ -40,6 +40,13 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
     console.error(`Error sirviendo archivo ${fileId}:`, error.message);
     res.status(404).json({ error: 'Archivo no encontrado o no accesible' });
   }
-});
+};
+
+router.get('/:id', serveFile);
+
+// Alias con nombre y extension para proveedores (como WhatsApp) que validan
+// el tipo de media a partir de la URL antes de descargar el archivo.
+// Ejemplo: /api/files/ATTACHMENT_ID/imagen.jpg
+router.get('/:id/:fileName', serveFile);
 
 export default router;

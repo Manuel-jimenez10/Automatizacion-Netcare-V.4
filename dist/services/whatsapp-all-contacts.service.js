@@ -39,12 +39,11 @@ class WhatsappAllContactsService {
         console.log('🚀 ============================================\n');
         const template = await this.espoCRMClient.getEntity('WhatsappTemplate', templateRecordId);
         this.validateTemplate(template);
-        const attachmentUrl = `${env_1.env.publicUrl}/api/files/${template.archivoAdjuntoId}`;
         const progress = (0, exports.createInitialAllContactsProgress)();
         const processedPhones = new Set();
         console.log(`📋 Template: "${template.name}" (ID: ${template.id})`);
         console.log(`   - SID Twilio: ${template.whatsappTemplateSID}`);
-        console.log(`   - Imagen publica: ${attachmentUrl}`);
+        console.log('   - Imagen: estatica dentro del template multimedia de Twilio');
         console.log(`   - Audiencia: reporte ${CONTACTS_REPORT_ID}`);
         const contacts = this.reportContactsLoader
             ? await this.reportContactsLoader(CONTACTS_REPORT_ID)
@@ -52,7 +51,7 @@ class WhatsappAllContactsService {
         progress.totalContacts = contacts.length;
         console.log(`\n📊 Contactos extraidos del reporte: ${contacts.length}`);
         for (const contact of contacts) {
-            await this.processContact(contact, template, attachmentUrl, processedPhones, progress);
+            await this.processContact(contact, template, processedPhones, progress);
             onProgress?.(this.cloneProgress(progress));
         }
         console.log('\n✅ ============================================');
@@ -119,11 +118,8 @@ class WhatsappAllContactsService {
         if (!template.whatsappTemplateSID) {
             throw new Error(`El template "${template.name}" no tiene SID de Twilio configurado.`);
         }
-        if (!template.archivoAdjuntoId) {
-            throw new Error(`El template "${template.name}" no tiene Archivo Adjunto. La variable {{2}} requiere una imagen.`);
-        }
     }
-    async processContact(contact, template, attachmentUrl, processedPhones, progress) {
+    async processContact(contact, template, processedPhones, progress) {
         progress.processed++;
         const rawPhone = typeof contact.phone === 'string' ? contact.phone.trim() : '';
         if (!rawPhone) {
@@ -143,17 +139,19 @@ class WhatsappAllContactsService {
             return;
         }
         processedPhones.add(validPhone);
-        const contactName = contact.name?.trim() || 'Cliente';
+        // Las variables de templates aprobados no admiten saltos de linea ni
+        // secuencias largas de espacios. El fallback evita valores vacios.
+        const contactName = this.sanitizeTemplateVariable(contact.name, 'Cliente');
         try {
             const twilioResponse = await this.sendTemplateMessage({
                 phone: validPhone,
                 contentSid: template.whatsappTemplateSID,
                 contentVariables: {
                     '1': contactName,
-                    '2': attachmentUrl,
                 },
             });
-            await this.logMessageInEspo(template, contact, validPhone, twilioResponse);
+            const sentMessageText = this.getActualSentMessage(twilioResponse, contactName);
+            await this.logMessageInEspo(template, contact, validPhone, twilioResponse, sentMessageText);
             progress.sent++;
             console.log(`   ✅ Enviado a ${contactName} (${validPhone})`);
         }
@@ -168,7 +166,7 @@ class WhatsappAllContactsService {
             }
         }
     }
-    async logMessageInEspo(template, contact, phone, twilioResponse) {
+    async logMessageInEspo(template, contact, phone, twilioResponse, sentMessageText) {
         try {
             const conversations = await this.espoCRMClient.searchEntities('WhatsappConverstion', [
                 {
@@ -178,18 +176,18 @@ class WhatsappAllContactsService {
                 },
             ]);
             const conversationId = conversations[0]?.id;
-            const description = template.contentMessageTemplate ||
-                `Template ${template.name} enviado a ${contact.name || 'Cliente'}`;
             const messagePayload = {
                 name: phone,
                 contact: phone,
                 status: 'Sent',
                 type: 'Out',
-                description,
+                description: sentMessageText,
                 messageSid: twilioResponse.sid,
                 isRead: false,
-                archivoAdjuntoId: template.archivoAdjuntoId,
             };
+            if (template.archivoAdjuntoId) {
+                messagePayload.archivoAdjuntoId = template.archivoAdjuntoId;
+            }
             if (contact.id) {
                 messagePayload.contactId = contact.id;
             }
@@ -199,7 +197,8 @@ class WhatsappAllContactsService {
             await this.espoCRMClient.createEntity('WhatsappMessage', messagePayload);
             if (conversationId) {
                 await this.espoCRMClient.updateEntity('WhatsappConverstion', conversationId, {
-                    description: description.substring(0, 100),
+                    // Guardar el mensaje completo que Twilio entrego, no una preview.
+                    description: sentMessageText,
                     fechaHoraUltimoMensaje: new Date()
                         .toISOString()
                         .slice(0, 19)
@@ -210,6 +209,17 @@ class WhatsappAllContactsService {
         catch (error) {
             console.error('   ⚠️ El mensaje se envio, pero no se pudo registrar en EspoCRM:', error.message);
         }
+    }
+    getActualSentMessage(twilioResponse, contactName) {
+        if (typeof twilioResponse?.body === 'string' && twilioResponse.body.trim()) {
+            return twilioResponse.body.trim();
+        }
+        console.warn(`   ⚠️ Twilio no devolvio body para ${contactName}; se guardara un indicador sin usar contentMessageTemplate.`);
+        return `Mensaje de WhatsApp enviado a ${contactName}`;
+    }
+    sanitizeTemplateVariable(value, fallback) {
+        const sanitized = (value || '').replace(/\s+/g, ' ').trim();
+        return sanitized || fallback;
     }
     recordError(progress, contact, phone, error) {
         if (progress.errors.length >= MAX_RECORDED_ERRORS) {

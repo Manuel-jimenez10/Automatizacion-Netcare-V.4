@@ -105,13 +105,12 @@ export class WhatsappAllContactsService {
 
     this.validateTemplate(template);
 
-    const attachmentUrl = `${env.publicUrl}/api/files/${template.archivoAdjuntoId}`;
     const progress = createInitialAllContactsProgress();
     const processedPhones = new Set<string>();
 
     console.log(`📋 Template: "${template.name}" (ID: ${template.id})`);
     console.log(`   - SID Twilio: ${template.whatsappTemplateSID}`);
-    console.log(`   - Imagen publica: ${attachmentUrl}`);
+    console.log('   - Imagen: estatica dentro del template multimedia de Twilio');
     console.log(`   - Audiencia: reporte ${CONTACTS_REPORT_ID}`);
 
     const contacts = this.reportContactsLoader
@@ -125,7 +124,6 @@ export class WhatsappAllContactsService {
       await this.processContact(
         contact,
         template,
-        attachmentUrl,
         processedPhones,
         progress,
       );
@@ -224,17 +222,11 @@ export class WhatsappAllContactsService {
       );
     }
 
-    if (!template.archivoAdjuntoId) {
-      throw new Error(
-        `El template "${template.name}" no tiene Archivo Adjunto. La variable {{2}} requiere una imagen.`,
-      );
-    }
   }
 
   private async processContact(
     contact: ReportContact,
     template: EspoCRMWhatsappTemplate,
-    attachmentUrl: string,
     processedPhones: Set<string>,
     progress: AllContactsSendProgress,
   ): Promise<void> {
@@ -261,7 +253,9 @@ export class WhatsappAllContactsService {
     }
 
     processedPhones.add(validPhone);
-    const contactName = contact.name?.trim() || 'Cliente';
+    // Las variables de templates aprobados no admiten saltos de linea ni
+    // secuencias largas de espacios. El fallback evita valores vacios.
+    const contactName = this.sanitizeTemplateVariable(contact.name, 'Cliente');
 
     try {
       const twilioResponse = await this.sendTemplateMessage({
@@ -269,15 +263,20 @@ export class WhatsappAllContactsService {
         contentSid: template.whatsappTemplateSID,
         contentVariables: {
           '1': contactName,
-          '2': attachmentUrl,
         },
       });
+
+      const sentMessageText = this.getActualSentMessage(
+        twilioResponse,
+        contactName,
+      );
 
       await this.logMessageInEspo(
         template,
         contact,
         validPhone,
         twilioResponse,
+        sentMessageText,
       );
 
       progress.sent++;
@@ -298,6 +297,7 @@ export class WhatsappAllContactsService {
     contact: ReportContact,
     phone: string,
     twilioResponse: any,
+    sentMessageText: string,
   ): Promise<void> {
     try {
       const conversations = await this.espoCRMClient.searchEntities(
@@ -312,19 +312,20 @@ export class WhatsappAllContactsService {
       );
 
       const conversationId = conversations[0]?.id;
-      const description = template.contentMessageTemplate ||
-        `Template ${template.name} enviado a ${contact.name || 'Cliente'}`;
 
       const messagePayload: any = {
         name: phone,
         contact: phone,
         status: 'Sent',
         type: 'Out',
-        description,
+        description: sentMessageText,
         messageSid: twilioResponse.sid,
         isRead: false,
-        archivoAdjuntoId: template.archivoAdjuntoId,
       };
+
+      if (template.archivoAdjuntoId) {
+        messagePayload.archivoAdjuntoId = template.archivoAdjuntoId;
+      }
 
       if (contact.id) {
         messagePayload.contactId = contact.id;
@@ -341,7 +342,8 @@ export class WhatsappAllContactsService {
           'WhatsappConverstion',
           conversationId,
           {
-            description: description.substring(0, 100),
+            // Guardar el mensaje completo que Twilio entrego, no una preview.
+            description: sentMessageText,
             fechaHoraUltimoMensaje: new Date()
               .toISOString()
               .slice(0, 19)
@@ -355,6 +357,22 @@ export class WhatsappAllContactsService {
         error.message,
       );
     }
+  }
+
+  private getActualSentMessage(twilioResponse: any, contactName: string): string {
+    if (typeof twilioResponse?.body === 'string' && twilioResponse.body.trim()) {
+      return twilioResponse.body.trim();
+    }
+
+    console.warn(
+      `   ⚠️ Twilio no devolvio body para ${contactName}; se guardara un indicador sin usar contentMessageTemplate.`,
+    );
+    return `Mensaje de WhatsApp enviado a ${contactName}`;
+  }
+
+  private sanitizeTemplateVariable(value: string | undefined, fallback: string): string {
+    const sanitized = (value || '').replace(/\s+/g, ' ').trim();
+    return sanitized || fallback;
   }
 
   private recordError(

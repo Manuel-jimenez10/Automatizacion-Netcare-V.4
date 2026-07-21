@@ -537,7 +537,21 @@ const sendDynamicTemplateMessage = async ({ phone, contentSid, contentVariables,
             messageParams.statusCallback = validatedCallbackUrl;
             console.log('📡 Enviando CON statusCallback:', validatedCallbackUrl);
         }
-        const message = await client.messages.create(messageParams);
+        let message = await client.messages.create(messageParams);
+        // Con ContentSid, `body` contiene el texto final ya renderizado por Twilio.
+        // Si la respuesta inicial aun no lo incluye, hidratamos el recurso una vez
+        // para que los modulos puedan guardar exactamente lo que recibio el cliente.
+        if (!message.body && message.sid) {
+            try {
+                const hydratedMessage = await client.messages(message.sid).fetch();
+                if (hydratedMessage.body) {
+                    message = hydratedMessage;
+                }
+            }
+            catch (fetchError) {
+                console.warn(`⚠️ No se pudo recuperar el body renderizado de ${message.sid}:`, fetchError.message);
+            }
+        }
         console.log(`✅ Mensaje con template dinámico enviado exitosamente`);
         console.log(`   - SID: ${message.sid}`);
         console.log(`   - Estado: ${message.status}`);

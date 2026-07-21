@@ -10,10 +10,11 @@ const {
   WhatsappBulkJobManager,
 } = require('../dist/services/whatsapp-bulk-job.service');
 
-test('envia name e imagen desde el reporte, con validacion y sin duplicados', async () => {
+test('envia name al template multimedia estatico, con validacion y sin duplicados', async () => {
   const reportCalls = [];
   const sentMessages = [];
   const createdMessages = [];
+  const updatedConversations = [];
 
   const espoCRMClient = {
     async getEntity() {
@@ -22,17 +23,20 @@ test('envia name e imagen desde el reporte, con validacion y sin duplicados', as
         name: 'anuncios_netcare',
         whatsappTemplateSID: 'HX_TEST',
         archivoAdjuntoId: 'image-1',
+        contentMessageTemplate: '<p>Hola, nombre. Vista previa incorrecta.</p>',
       };
     },
     async request() { throw new Error('El loader de prueba evita la API real'); },
     async searchEntities() {
-      return [];
+      return [{ id: 'conversation-1' }];
     },
     async createEntity(_entityType, payload) {
       createdMessages.push(payload);
       return { id: 'message-1' };
     },
-    async updateEntity() {},
+    async updateEntity(_entityType, _entityId, payload) {
+      updatedConversations.push(payload);
+    },
   };
 
   const service = new WhatsappAllContactsService({
@@ -48,7 +52,10 @@ test('envia name e imagen desde el reporte, con validacion y sin duplicados', as
     },
     async sendTemplateMessage(payload) {
       sentMessages.push(payload);
-      return { sid: 'SM_TEST' };
+      return {
+        sid: 'SM_TEST',
+        body: 'Hola, Ana. Este es el mensaje completo que recibio el cliente.',
+      };
     },
   });
 
@@ -61,10 +68,18 @@ test('envia name e imagen desde el reporte, con validacion y sin duplicados', as
     contentSid: 'HX_TEST',
     contentVariables: {
       '1': 'Ana',
-      '2': 'http://localhost:3000/api/files/image-1',
     },
   });
   assert.equal(createdMessages[0].contactId, 'contact-1');
+  assert.equal(
+    createdMessages[0].description,
+    'Hola, Ana. Este es el mensaje completo que recibio el cliente.',
+  );
+  assert.equal(
+    updatedConversations[0].description,
+    'Hola, Ana. Este es el mensaje completo que recibio el cliente.',
+  );
+  assert.doesNotMatch(createdMessages[0].description, /Vista previa/);
   assert.equal(result.totalContacts, 3);
   assert.equal(result.processed, 3);
   assert.equal(result.sent, 1);
@@ -72,7 +87,7 @@ test('envia name e imagen desde el reporte, con validacion y sin duplicados', as
   assert.equal(result.skippedDuplicatePhone, 1);
 });
 
-test('detiene el trabajo si el template no tiene Archivo Adjunto para {{2}}', async () => {
+test('permite el envio sin Archivo Adjunto porque la imagen es estatica en Twilio', async () => {
   let listedContacts = false;
   const service = new WhatsappAllContactsService({
     delayMs: 0,
@@ -98,11 +113,9 @@ test('detiene el trabajo si el template no tiene Archivo Adjunto para {{2}}', as
     },
   });
 
-  await assert.rejects(
-    () => service.handleAllContactsSend('template-2'),
-    /no tiene Archivo Adjunto/,
-  );
-  assert.equal(listedContacts, false);
+  const result = await service.handleAllContactsSend('template-2');
+  assert.equal(listedContacts, true);
+  assert.equal(result.totalContacts, 0);
 });
 
 test('exporta el reporte funcional y reconoce columnas name y phone', async () => {
@@ -139,7 +152,7 @@ test('exporta el reporte funcional y reconoce columnas name y phone', async () =
       },
       async sendTemplateMessage(payload) {
         sentMessages.push(payload);
-        return { sid: 'SM_REPORT' };
+        return { sid: 'SM_REPORT', body: 'Hola, Maria. Mensaje final.' };
       },
     });
 
@@ -151,7 +164,7 @@ test('exporta el reporte funcional y reconoce columnas name y phone', async () =
       data: { id: '69c1bf528b8fb6477', format: 'csv' },
     }]);
     assert.equal(sentMessages[0].contentVariables['1'], 'Maria');
-    assert.equal(sentMessages[0].contentVariables['2'], 'http://localhost:3000/api/files/image-4');
+    assert.equal(sentMessages[0].contentVariables['2'], undefined);
     assert.equal(sentMessages[0].phone, '+525511112222');
     assert.equal(result.sent, 1);
   } finally {

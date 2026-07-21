@@ -37,7 +37,16 @@ envío en segundo plano.
 Variables enviadas al template de Twilio:
 
 - `{{1}}`: campo `name` del Contact.
-- `{{2}}`: URL pública del campo `archivoAdjuntoId` del WhatsappTemplate.
+
+La imagen se configura de forma estatica en el campo Media del template de
+Twilio; este flujo no envia `{{2}}`. Para que Twilio reconozca el formato, se
+puede usar la URL publica con extension:
+
+`https://automatizacion-netcare-v-4-kvin.onrender.com/api/files/ID_ADJUNTO/imagen.jpg`
+
+En `WhatsappMessage.description` y en el campo Último Mensaje de la conversación
+se guarda el `body` final renderizado que devuelve Twilio, completo y sin usar
+la previsualización `contentMessageTemplate`.
 
 La respuesta incluye un `jobId`. El progreso se consulta con:
 
