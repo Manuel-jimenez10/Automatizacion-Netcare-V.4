@@ -19,6 +19,35 @@ Sistema de automatización para EspoCRM que envía mensajes de seguimiento por W
 
 ## 🚀 Endpoints
 
+### Envío asíncrono de un WhatsappTemplate a todos los Contacts
+
+**POST** `/api/templates/send-all-contacts`
+
+Este endpoint no usa un Report. Recorre directamente la entidad `Contact` de
+EspoCRM, en páginas de 100 registros, y procesa solamente los contactos cuyo
+campo `phone` tenga valor. Responde `202 Accepted` inmediatamente y continúa el
+envío en segundo plano.
+
+```json
+{
+  "id": "ID_DEL_WHATSAPP_TEMPLATE"
+}
+```
+
+Variables enviadas al template de Twilio:
+
+- `{{1}}`: campo `name` del Contact.
+- `{{2}}`: URL pública del campo `archivoAdjuntoId` del WhatsappTemplate.
+
+La respuesta incluye un `jobId`. El progreso se consulta con:
+
+**GET** `/api/templates/jobs/:jobId`
+
+Para activarlo desde el checkbox de EspoCRM, el workflow del registro
+`WhatsappTemplate` debe realizar el POST a `/api/templates/send-all-contacts`
+enviando el ID del registro. El endpoint anterior `/api/templates/send` conserva
+el comportamiento basado en reporte.
+
 ### Webhooks (Tasks)
 
 **POST** `/api/webhooks/task-completed`

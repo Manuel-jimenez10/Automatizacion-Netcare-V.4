@@ -2,6 +2,20 @@ import axios, { AxiosInstance } from 'axios';
 import { env } from '../config/env';
 import { EspoCRMTask, EspoCRMContact, EspoCRMQuote, EspoCRMAccount } from '../interfaces/interfaces';
 
+export interface EspoCRMListParams {
+  offset?: number;
+  maxSize?: number;
+  select?: string;
+  where?: any[];
+  orderBy?: string;
+  order?: 'asc' | 'desc';
+}
+
+export interface EspoCRMListResponse<T = any> {
+  list: T[];
+  total: number;
+}
+
 export class EspoCRMClient {
   private client: AxiosInstance;
 
@@ -85,6 +99,26 @@ export class EspoCRMClient {
       }
       throw new Error(`Error al obtener ${entityType}: ${error.message}`);
     }
+  }
+
+  /**
+   * Obtiene una pagina de entidades usando searchParams, el formato oficial de
+   * EspoCRM para combinar paginacion, seleccion de campos y filtros complejos.
+   */
+  async listEntitiesPage<T = any>(
+    entityType: string,
+    params: EspoCRMListParams,
+  ): Promise<EspoCRMListResponse<T>> {
+    const searchParams = encodeURIComponent(JSON.stringify(params));
+    const response = await this.request(
+      'GET',
+      `${entityType}?searchParams=${searchParams}`,
+    );
+
+    return {
+      list: Array.isArray(response.list) ? response.list as T[] : [],
+      total: typeof response.total === 'number' ? response.total : -1,
+    };
   }
 
   // Método para buscar entidades con filtros

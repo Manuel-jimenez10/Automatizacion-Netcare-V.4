@@ -83,6 +83,18 @@ class EspoCRMClient {
             throw new Error(`Error al obtener ${entityType}: ${error.message}`);
         }
     }
+    /**
+     * Obtiene una pagina de entidades usando searchParams, el formato oficial de
+     * EspoCRM para combinar paginacion, seleccion de campos y filtros complejos.
+     */
+    async listEntitiesPage(entityType, params) {
+        const searchParams = encodeURIComponent(JSON.stringify(params));
+        const response = await this.request('GET', `${entityType}?searchParams=${searchParams}`);
+        return {
+            list: Array.isArray(response.list) ? response.list : [],
+            total: typeof response.total === 'number' ? response.total : -1,
+        };
+    }
     // Método para buscar entidades con filtros
     // Método para buscar entidades con filtros
     async searchEntities(entityType, where) {
