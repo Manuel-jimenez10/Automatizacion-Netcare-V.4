@@ -23,9 +23,9 @@ Sistema de automatización para EspoCRM que envía mensajes de seguimiento por W
 
 **POST** `/api/templates/send-all-contacts`
 
-Este endpoint no usa un Report. Recorre directamente la entidad `Contact` de
-EspoCRM, en páginas de 100 registros, y procesa solamente los contactos cuyo
-campo `phone` tenga valor. Responde `202 Accepted` inmediatamente y continúa el
+Este endpoint reutiliza el reporte `69c1bf528b8fb6477`, configurado para incluir
+los contactos cuyo campo Phone tenga valor. Exporta sus columnas `name` y
+`phone`/`phoneNumber`, responde `202 Accepted` inmediatamente y continúa el
 envío en segundo plano.
 
 ```json

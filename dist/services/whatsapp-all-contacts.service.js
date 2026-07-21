@@ -1,11 +1,15 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WhatsappAllContactsService = exports.createInitialAllContactsProgress = void 0;
+const axios_1 = __importDefault(require("axios"));
 const env_1 = require("../config/env");
 const phone_utils_1 = require("../utils/phone-utils");
 const espocrm_api_client_service_1 = require("./espocrm-api-client.service");
 const twilio_service_1 = require("./twilio.service");
-const DEFAULT_PAGE_SIZE = 100;
+const CONTACTS_REPORT_ID = '69c1bf528b8fb6477';
 const DEFAULT_DELAY_MS = 1500;
 const MAX_RECORDED_ERRORS = 200;
 const createInitialAllContactsProgress = () => ({
@@ -19,14 +23,14 @@ const createInitialAllContactsProgress = () => ({
 });
 exports.createInitialAllContactsProgress = createInitialAllContactsProgress;
 /**
- * Envia un WhatsappTemplate a todos los Contact que tengan valor en `phone`.
- * No usa reportes: recorre la entidad Contact directamente y por paginas.
+ * Envia un WhatsappTemplate a los Contact incluidos en el reporte configurado.
+ * El reporte filtra los contactos con Phone y exporta name + phone/phoneNumber.
  */
 class WhatsappAllContactsService {
     constructor(options = {}) {
         this.espoCRMClient = options.espoCRMClient || new espocrm_api_client_service_1.EspoCRMClient();
         this.sendTemplateMessage = options.sendTemplateMessage || twilio_service_1.sendDynamicTemplateMessage;
-        this.pageSize = options.pageSize || DEFAULT_PAGE_SIZE;
+        this.reportContactsLoader = options.reportContactsLoader;
         this.delayMs = options.delayMs ?? DEFAULT_DELAY_MS;
     }
     async handleAllContactsSend(templateRecordId, onProgress) {
@@ -38,44 +42,18 @@ class WhatsappAllContactsService {
         const attachmentUrl = `${env_1.env.publicUrl}/api/files/${template.archivoAdjuntoId}`;
         const progress = (0, exports.createInitialAllContactsProgress)();
         const processedPhones = new Set();
-        let offset = 0;
         console.log(`📋 Template: "${template.name}" (ID: ${template.id})`);
         console.log(`   - SID Twilio: ${template.whatsappTemplateSID}`);
         console.log(`   - Imagen publica: ${attachmentUrl}`);
-        console.log('   - Audiencia: todos los Contact con phone');
-        while (true) {
-            const page = await this.espoCRMClient.listEntitiesPage('Contact', {
-                offset,
-                maxSize: this.pageSize,
-                select: 'id,name,phone',
-                where: [
-                    {
-                        type: 'isNotNull',
-                        attribute: 'phone',
-                    },
-                ],
-                orderBy: 'id',
-                order: 'asc',
-            });
-            if (page.total >= 0) {
-                progress.totalContacts = page.total;
-            }
-            if (page.list.length === 0) {
-                break;
-            }
-            console.log(`\n📄 Contactos ${offset + 1}-${offset + page.list.length}` +
-                `${progress.totalContacts !== null ? ` de ${progress.totalContacts}` : ''}`);
-            for (const contact of page.list) {
-                await this.processContact(contact, template, attachmentUrl, processedPhones, progress);
-                onProgress?.(this.cloneProgress(progress));
-            }
-            offset += page.list.length;
-            if (page.list.length < this.pageSize) {
-                break;
-            }
-        }
-        if (progress.totalContacts === null) {
-            progress.totalContacts = progress.processed;
+        console.log(`   - Audiencia: reporte ${CONTACTS_REPORT_ID}`);
+        const contacts = this.reportContactsLoader
+            ? await this.reportContactsLoader(CONTACTS_REPORT_ID)
+            : await this.exportReportAndParseContacts(CONTACTS_REPORT_ID);
+        progress.totalContacts = contacts.length;
+        console.log(`\n📊 Contactos extraidos del reporte: ${contacts.length}`);
+        for (const contact of contacts) {
+            await this.processContact(contact, template, attachmentUrl, processedPhones, progress);
+            onProgress?.(this.cloneProgress(progress));
         }
         console.log('\n✅ ============================================');
         console.log(`✅ Envio masivo finalizado: ${progress.sent} enviados`);
@@ -86,6 +64,56 @@ class WhatsappAllContactsService {
         console.log('✅ ============================================\n');
         onProgress?.(this.cloneProgress(progress));
         return progress;
+    }
+    /** Reutiliza el mismo mecanismo de exportacion CSV del modulo funcional. */
+    async exportReportAndParseContacts(reportId) {
+        console.log(`\n📄 Exportando reporte ${reportId} a CSV...`);
+        const exportResponse = await this.espoCRMClient.request('POST', 'Report/action/exportList', { id: reportId, format: 'csv' });
+        if (!exportResponse.id) {
+            throw new Error('EspoCRM no devolvio el ID del CSV exportado.');
+        }
+        let baseUrl = env_1.env.espocrmBaseUrl;
+        baseUrl = baseUrl.replace(/\/api\/v1\/?$/, '').replace(/\/$/, '');
+        const downloadUrl = `${baseUrl}/?entryPoint=download&id=${exportResponse.id}`;
+        const downloadResponse = await axios_1.default.get(downloadUrl, {
+            headers: { 'X-Api-Key': env_1.env.espocrmApiKey },
+            responseType: 'arraybuffer',
+        });
+        const csvContent = Buffer.from(downloadResponse.data).toString('utf-8');
+        const lines = csvContent
+            .split(/\r?\n/)
+            .filter((line) => line.trim() !== '');
+        if (lines.length < 2) {
+            return [];
+        }
+        const headers = lines[0]
+            .replace(/^\uFEFF/, '')
+            .split(';')
+            .map(header => header.replace(/^"|"$/g, '').trim());
+        const idIdx = headers.indexOf('id');
+        const nameIdx = headers.indexOf('name');
+        let phoneIdx = headers.indexOf('phoneNumber');
+        if (phoneIdx === -1) {
+            phoneIdx = headers.indexOf('phone');
+        }
+        if (nameIdx === -1 || phoneIdx === -1) {
+            throw new Error(`El reporte no tiene las columnas requeridas (name y phone o phoneNumber). ` +
+                `Columnas encontradas: ${headers.join(', ')}`);
+        }
+        const contacts = [];
+        for (let i = 1; i < lines.length; i++) {
+            const row = lines[i].split(';');
+            const id = idIdx >= 0 ? this.cleanCsvValue(row[idIdx]) : undefined;
+            const name = this.cleanCsvValue(row[nameIdx]);
+            const phone = this.cleanCsvValue(row[phoneIdx]).replace(/^'/, '');
+            if (name || phone) {
+                contacts.push({ id, name, phone });
+            }
+        }
+        return contacts;
+    }
+    cleanCsvValue(value) {
+        return (value || '').replace(/^"|"$/g, '').trim();
     }
     validateTemplate(template) {
         if (!template.whatsappTemplateSID) {
@@ -155,7 +183,6 @@ class WhatsappAllContactsService {
             const messagePayload = {
                 name: phone,
                 contact: phone,
-                contactId: contact.id,
                 status: 'Sent',
                 type: 'Out',
                 description,
@@ -163,6 +190,9 @@ class WhatsappAllContactsService {
                 isRead: false,
                 archivoAdjuntoId: template.archivoAdjuntoId,
             };
+            if (contact.id) {
+                messagePayload.contactId = contact.id;
+            }
             if (conversationId) {
                 messagePayload.whatsappConverstionId = conversationId;
             }
@@ -186,7 +216,7 @@ class WhatsappAllContactsService {
             return;
         }
         progress.errors.push({
-            contactId: contact.id,
+            contactId: contact.id || '',
             contact: contact.name || '',
             phone,
             error,

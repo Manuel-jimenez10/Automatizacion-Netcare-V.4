@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const axios = require('axios');
 
 const {
   WhatsappAllContactsService,
@@ -9,8 +10,8 @@ const {
   WhatsappBulkJobManager,
 } = require('../dist/services/whatsapp-bulk-job.service');
 
-test('envia name e imagen a todos los Contact con phone, paginando y sin duplicados', async () => {
-  const listCalls = [];
+test('envia name e imagen desde el reporte, con validacion y sin duplicados', async () => {
+  const reportCalls = [];
   const sentMessages = [];
   const createdMessages = [];
 
@@ -23,26 +24,7 @@ test('envia name e imagen a todos los Contact con phone, paginando y sin duplica
         archivoAdjuntoId: 'image-1',
       };
     },
-    async listEntitiesPage(_entityType, params) {
-      listCalls.push(params);
-
-      if (params.offset === 0) {
-        return {
-          total: 3,
-          list: [
-            { id: 'contact-1', name: 'Ana', phone: '55 1234 5678' },
-            { id: 'contact-2', name: 'Luis', phone: '+52 55 1234 5678' },
-          ],
-        };
-      }
-
-      return {
-        total: 3,
-        list: [
-          { id: 'contact-3', name: 'Telefono invalido', phone: '123' },
-        ],
-      };
-    },
+    async request() { throw new Error('El loader de prueba evita la API real'); },
     async searchEntities() {
       return [];
     },
@@ -56,7 +38,14 @@ test('envia name e imagen a todos los Contact con phone, paginando y sin duplica
   const service = new WhatsappAllContactsService({
     espoCRMClient,
     delayMs: 0,
-    pageSize: 2,
+    async reportContactsLoader(reportId) {
+      reportCalls.push(reportId);
+      return [
+        { id: 'contact-1', name: 'Ana', phone: '55 1234 5678' },
+        { id: 'contact-2', name: 'Luis', phone: '+52 55 1234 5678' },
+        { id: 'contact-3', name: 'Telefono invalido', phone: '123' },
+      ];
+    },
     async sendTemplateMessage(payload) {
       sentMessages.push(payload);
       return { sid: 'SM_TEST' };
@@ -65,11 +54,7 @@ test('envia name e imagen a todos los Contact con phone, paginando y sin duplica
 
   const result = await service.handleAllContactsSend('template-1');
 
-  assert.equal(listCalls.length, 2);
-  assert.equal(listCalls[0].select, 'id,name,phone');
-  assert.deepEqual(listCalls[0].where, [
-    { type: 'isNotNull', attribute: 'phone' },
-  ]);
+  assert.deepEqual(reportCalls, ['69c1bf528b8fb6477']);
   assert.equal(sentMessages.length, 1);
   assert.deepEqual(sentMessages[0], {
     phone: '+525512345678',
@@ -99,13 +84,14 @@ test('detiene el trabajo si el template no tiene Archivo Adjunto para {{2}}', as
           whatsappTemplateSID: 'HX_TEST',
         };
       },
-      async listEntitiesPage() {
-        listedContacts = true;
-        return { total: 0, list: [] };
-      },
+      async request() { return {}; },
       async searchEntities() { return []; },
       async createEntity() { return {}; },
       async updateEntity() {},
+    },
+    async reportContactsLoader() {
+      listedContacts = true;
+      return [];
     },
     async sendTemplateMessage() {
       throw new Error('No se debe enviar');
@@ -117,6 +103,60 @@ test('detiene el trabajo si el template no tiene Archivo Adjunto para {{2}}', as
     /no tiene Archivo Adjunto/,
   );
   assert.equal(listedContacts, false);
+});
+
+test('exporta el reporte funcional y reconoce columnas name y phone', async () => {
+  const originalAxiosGet = axios.get;
+  const apiRequests = [];
+  const sentMessages = [];
+
+  axios.get = async () => ({
+    data: Buffer.from(
+      'id;name;phone\r\ncontact-4;Maria;5511112222\r\n',
+      'utf-8',
+    ),
+  });
+
+  try {
+    const service = new WhatsappAllContactsService({
+      delayMs: 0,
+      espoCRMClient: {
+        async getEntity() {
+          return {
+            id: 'template-4',
+            name: 'anuncios_netcare',
+            whatsappTemplateSID: 'HX_REPORT',
+            archivoAdjuntoId: 'image-4',
+          };
+        },
+        async request(method, endpoint, data) {
+          apiRequests.push({ method, endpoint, data });
+          return { id: 'csv-attachment-1' };
+        },
+        async searchEntities() { return []; },
+        async createEntity() { return { id: 'message-4' }; },
+        async updateEntity() {},
+      },
+      async sendTemplateMessage(payload) {
+        sentMessages.push(payload);
+        return { sid: 'SM_REPORT' };
+      },
+    });
+
+    const result = await service.handleAllContactsSend('template-4');
+
+    assert.deepEqual(apiRequests, [{
+      method: 'POST',
+      endpoint: 'Report/action/exportList',
+      data: { id: '69c1bf528b8fb6477', format: 'csv' },
+    }]);
+    assert.equal(sentMessages[0].contentVariables['1'], 'Maria');
+    assert.equal(sentMessages[0].contentVariables['2'], 'http://localhost:3000/api/files/image-4');
+    assert.equal(sentMessages[0].phone, '+525511112222');
+    assert.equal(result.sent, 1);
+  } finally {
+    axios.get = originalAxiosGet;
+  }
 });
 
 test('la cola responde de inmediato, evita trabajos duplicados y conserva progreso', async () => {
