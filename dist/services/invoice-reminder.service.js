@@ -216,48 +216,30 @@ class InvoiceReminderService {
     async logMessageInEspo(invoice, phone, twilioResponse) {
         console.log('💾 Guardando mensaje en WhatsappMessage...');
         try {
-            let conversationId = '';
-            const conversations = await this.espoCRMClient.searchEntities('WhatsappConverstion', [
-                { type: 'equals', attribute: 'name', value: phone }
-            ]);
-            if (conversations.length > 0) {
-                conversationId = conversations[0].id;
-                console.log(`✅ Conversación existente encontrada: ${conversationId}`);
-            }
-            else {
-                console.log(`✨ Creando nueva conversación para ${phone}`);
-                const conversationPayload = {
-                    name: phone,
-                    description: `Conversación iniciada por Recordatorio de Prefactura`
-                };
-                if (invoice.billingContactName) {
-                    conversationPayload.contact = invoice.billingContactName;
-                    if (invoice.billingContactId)
-                        conversationPayload.contactId = invoice.billingContactId;
-                }
-                const newConv = await this.espoCRMClient.createEntity('WhatsappConverstion', conversationPayload);
-                conversationId = newConv.id;
-            }
-            const senderPhone = env_1.env.twilioWhatsappFrom.replace('whatsapp:', '');
+            // El mensaje se guarda SOLO en WhatsappMessage, con el teléfono del
+            // destinatario en 'name'. El workflow de EspoCRM lo empareja con el
+            // Contact y la conversación a partir de ese número (conversación vacía aquí).
             const messagePayload = {
-                name: senderPhone,
-                contact: senderPhone,
+                name: phone, // teléfono COMPLETO del destinatario
+                contact: phone, // mismo teléfono
                 status: 'Sent',
                 type: 'Out',
                 description: `Recordatorio automático - Prefactura: ${invoice.name}`,
-                whatsappConverstionId: conversationId,
                 messageSid: twilioResponse.sid,
-                isRead: false
+                isRead: false,
             };
+            // Link de negocio (no de conversación): Contacto de facturación
             if (invoice.billingContactId) {
                 messagePayload.contactId = invoice.billingContactId;
             }
+            console.log('📤 [WhatsappMessage] Campos a guardar en EspoCRM:');
+            console.log(`   - Name (teléfono destinatario): ${messagePayload.name}`);
+            console.log(`   - Mensaje (description): ${messagePayload.description}`);
+            console.log(`   - Conversación: ${messagePayload.whatsappConverstionId || '(vacía)'}`);
+            console.log(`   - Tipo: ${messagePayload.type}`);
+            console.log(`   - Status: ${messagePayload.status}`);
             await this.espoCRMClient.createEntity('WhatsappMessage', messagePayload);
             console.log(`✅ WhatsappMessage creado con SID: ${twilioResponse.sid}`);
-            await this.espoCRMClient.updateEntity('WhatsappConverstion', conversationId, {
-                description: `Recordatorio automático - Prefactura: ${invoice.name}`,
-                fechaHoraUltimoMensaje: new Date().toISOString().slice(0, 19).replace('T', ' '),
-            });
         }
         catch (error) {
             console.error('❌ Error guardando en WhatsappMessage (el mensaje SÍ se envió):', error.message);

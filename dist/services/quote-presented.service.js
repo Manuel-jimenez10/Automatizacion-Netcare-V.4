@@ -83,60 +83,32 @@ class QuotePresentedService {
     async logMessageInEspo(quote, phone, clientName, twilioResponse) {
         console.log('💾 Guardando mensaje en WhatsappMessage...');
         try {
-            // Buscar o crear conversación
-            let conversationId = '';
-            const conversations = await this.espoCRMClient.searchEntities('WhatsappConverstion', [
-                {
-                    type: 'equals',
-                    attribute: 'name',
-                    value: phone
-                }
-            ]);
-            if (conversations.length > 0) {
-                conversationId = conversations[0].id;
-                console.log(`✅ Conversación existente encontrada: ${conversationId}`);
-            }
-            else {
-                console.log(`✨ Creando nueva conversación para ${phone}`);
-                const conversationPayload = {
-                    name: phone, // Nombre de conversación es el teléfono
-                    description: `Conversación iniciada por Quote Presentada`
-                };
-                if (quote.billingContactName) {
-                    conversationPayload.contact = quote.billingContactName;
-                    if (quote.billingContactId) {
-                        conversationPayload.contactId = quote.billingContactId;
-                    }
-                }
-                const newConv = await this.espoCRMClient.createEntity('WhatsappConverstion', conversationPayload);
-                conversationId = newConv.id;
-            }
-            // Crear registro de mensaje
-            const senderPhone = env_1.env.twilioWhatsappFrom.replace('whatsapp:', '');
+            // El mensaje se guarda SOLO en WhatsappMessage, con el teléfono del
+            // destinatario en 'name'. El workflow de EspoCRM lo empareja con el
+            // Contact y la conversación a partir de ese número (conversación vacía aquí).
             const messagePayload = {
-                name: senderPhone,
-                contact: senderPhone,
+                name: phone, // teléfono COMPLETO del destinatario
+                contact: phone, // mismo teléfono
                 status: 'Sent',
                 type: 'Out',
                 description: `Cotización Presentada: ${quote.name}`,
-                whatsappConverstionId: conversationId,
                 messageSid: twilioResponse.sid,
-                isRead: false
+                isRead: false,
             };
-            // Vincular con Contacto
+            // Links de negocio (no de conversación): Contacto de facturación y Quote
             if (quote.billingContactId) {
                 messagePayload.contactId = quote.billingContactId;
             }
-            // Vincular con Quote (asumiendo campos custom)
             messagePayload.quoteId = quote.id;
             messagePayload.quoteName = quote.name;
+            console.log('📤 [WhatsappMessage] Campos a guardar en EspoCRM:');
+            console.log(`   - Name (teléfono destinatario): ${messagePayload.name}`);
+            console.log(`   - Mensaje (description): ${messagePayload.description}`);
+            console.log(`   - Conversación: ${messagePayload.whatsappConverstionId || '(vacía)'}`);
+            console.log(`   - Tipo: ${messagePayload.type}`);
+            console.log(`   - Status: ${messagePayload.status}`);
             await this.espoCRMClient.createEntity('WhatsappMessage', messagePayload);
             console.log(`✅ Mensaje guardado en WhatsappMessage con SID: ${twilioResponse.sid}`);
-            // Actualizar conversación con último mensaje
-            await this.espoCRMClient.updateEntity('WhatsappConverstion', conversationId, {
-                description: `Cotización Presentada: ${quote.name}`,
-                fechaHoraUltimoMensaje: new Date().toISOString().slice(0, 19).replace('T', ' '),
-            });
         }
         catch (error) {
             console.error('❌ Error guardando mensaje en WhatsappMessage (el mensaje sí se envió):', error.message);

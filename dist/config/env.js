@@ -38,4 +38,8 @@ exports.env = {
     prefacturaReminder3DaysSid: process.env.TWILIO_PREFACTURA_REMINDER_3DAYS_SID || '',
     prefacturaReminderOverdueSid: process.env.TWILIO_PREFACTURA_REMINDER_OVERDUE_SID || '',
     mensajeIniciarWhatsapp: process.env.MENSAJE_INICIAR_WHATSAPP || '',
+    // Modo prueba del envio masivo: telefonos separados por coma.
+    // Si tiene valor, /send-all-contacts SOLO envia a estos numeros (ignora el reporte).
+    // Vaciar la variable para volver al envio normal a todos los contactos.
+    bulkTestRecipients: process.env.BULK_TEST_RECIPIENTS || '',
 };

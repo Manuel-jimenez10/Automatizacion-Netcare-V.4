@@ -111,14 +111,25 @@ export class WhatsappAllContactsService {
     console.log(`📋 Template: "${template.name}" (ID: ${template.id})`);
     console.log(`   - SID Twilio: ${template.whatsappTemplateSID}`);
     console.log('   - Imagen: estatica dentro del template multimedia de Twilio');
-    console.log(`   - Audiencia: reporte ${CONTACTS_REPORT_ID}`);
+    const testRecipients = this.getTestRecipients();
+    const enTestMode = testRecipients.length > 0;
 
-    const contacts = this.reportContactsLoader
-      ? await this.reportContactsLoader(CONTACTS_REPORT_ID)
-      : await this.exportReportAndParseContacts(CONTACTS_REPORT_ID);
+    let contacts: ReportContact[];
+    if (enTestMode) {
+      console.log('🧪 ============================================');
+      console.log(`🧪 MODO PRUEBA (BULK_TEST_RECIPIENTS): solo ${testRecipients.length} numero(s), se ignora el reporte`);
+      testRecipients.forEach(r => console.log(`   - ${r.phone}`));
+      console.log('🧪 ============================================');
+      contacts = testRecipients;
+    } else {
+      console.log(`   - Audiencia: reporte ${CONTACTS_REPORT_ID}`);
+      contacts = this.reportContactsLoader
+        ? await this.reportContactsLoader(CONTACTS_REPORT_ID)
+        : await this.exportReportAndParseContacts(CONTACTS_REPORT_ID);
+    }
 
     progress.totalContacts = contacts.length;
-    console.log(`\n📊 Contactos extraidos del reporte: ${contacts.length}`);
+    console.log(`\n📊 Contactos a procesar: ${contacts.length}`);
 
     for (const contact of contacts) {
       await this.processContact(
@@ -141,6 +152,24 @@ export class WhatsappAllContactsService {
 
     onProgress?.(this.cloneProgress(progress));
     return progress;
+  }
+
+  /**
+   * Lista de prueba opcional (env BULK_TEST_RECIPIENTS). Si esta definida, el
+   * envio masivo ignora el reporte y solo manda a estos numeros. Vaciar la
+   * variable para volver al envio normal a todos los contactos.
+   */
+  private getTestRecipients(): ReportContact[] {
+    const raw = env.bulkTestRecipients;
+    if (!raw || !raw.trim()) {
+      return [];
+    }
+
+    return raw
+      .split(',')
+      .map(value => value.trim())
+      .filter(value => value !== '')
+      .map(phone => ({ name: 'Prueba', phone }));
   }
 
   /** Reutiliza el mismo mecanismo de exportacion CSV del modulo funcional. */
@@ -300,19 +329,9 @@ export class WhatsappAllContactsService {
     sentMessageText: string,
   ): Promise<void> {
     try {
-      const conversations = await this.espoCRMClient.searchEntities(
-        'WhatsappConverstion',
-        [
-          {
-            type: 'equals',
-            attribute: 'name',
-            value: phone,
-          },
-        ],
-      );
-
-      const conversationId = conversations[0]?.id;
-
+      // El mensaje se guarda SOLO en WhatsappMessage, con el telefono del
+      // destinatario en 'name'. El workflow de EspoCRM lo empareja con el
+      // Contact y la conversacion a partir de ese numero (conversacion vacia aqui).
       const messagePayload: any = {
         name: phone,
         contact: phone,
@@ -331,26 +350,14 @@ export class WhatsappAllContactsService {
         messagePayload.contactId = contact.id;
       }
 
-      if (conversationId) {
-        messagePayload.whatsappConverstionId = conversationId;
-      }
+      console.log('   📤 [WhatsappMessage] Campos a guardar en EspoCRM:');
+      console.log(`      - Name (telefono destinatario): ${messagePayload.name}`);
+      console.log(`      - Mensaje (description): ${messagePayload.description}`);
+      console.log(`      - Conversacion: ${messagePayload.whatsappConverstionId || '(vacia)'}`);
+      console.log(`      - Tipo: ${messagePayload.type}`);
+      console.log(`      - Status: ${messagePayload.status}`);
 
       await this.espoCRMClient.createEntity('WhatsappMessage', messagePayload);
-
-      if (conversationId) {
-        await this.espoCRMClient.updateEntity(
-          'WhatsappConverstion',
-          conversationId,
-          {
-            // Guardar el mensaje completo que Twilio entrego, no una preview.
-            description: sentMessageText,
-            fechaHoraUltimoMensaje: new Date()
-              .toISOString()
-              .slice(0, 19)
-              .replace('T', ' '),
-          },
-        );
-      }
     } catch (error: any) {
       console.error(
         '   ⚠️ El mensaje se envio, pero no se pudo registrar en EspoCRM:',
