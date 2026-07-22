@@ -42,4 +42,7 @@ exports.env = {
     // Si tiene valor, /send-all-contacts SOLO envia a estos numeros (ignora el reporte).
     // Vaciar la variable para volver al envio normal a todos los contactos.
     bulkTestRecipients: process.env.BULK_TEST_RECIPIENTS || '',
+    // ID del Report de EspoCRM usado como audiencia del envio masivo.
+    // Si esta vacio, se usa el reporte por defecto del codigo.
+    bulkContactsReportId: process.env.BULK_CONTACTS_REPORT_ID || '',
 };

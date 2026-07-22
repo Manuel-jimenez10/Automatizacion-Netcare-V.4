@@ -122,10 +122,11 @@ export class WhatsappAllContactsService {
       console.log('🧪 ============================================');
       contacts = testRecipients;
     } else {
-      console.log(`   - Audiencia: reporte ${CONTACTS_REPORT_ID}`);
+      const reportId = this.getReportId();
+      console.log(`   - Audiencia: reporte ${reportId}`);
       contacts = this.reportContactsLoader
-        ? await this.reportContactsLoader(CONTACTS_REPORT_ID)
-        : await this.exportReportAndParseContacts(CONTACTS_REPORT_ID);
+        ? await this.reportContactsLoader(reportId)
+        : await this.exportReportAndParseContacts(reportId);
     }
 
     progress.totalContacts = contacts.length;
@@ -170,6 +171,15 @@ export class WhatsappAllContactsService {
       .map(value => value.trim())
       .filter(value => value !== '')
       .map(phone => ({ name: 'Prueba', phone }));
+  }
+
+  /**
+   * ID del Report que define la audiencia. Usa BULK_CONTACTS_REPORT_ID si esta
+   * definida; de lo contrario cae al reporte por defecto del codigo.
+   */
+  private getReportId(): string {
+    const configured = env.bulkContactsReportId?.trim();
+    return configured || CONTACTS_REPORT_ID;
   }
 
   /** Reutiliza el mismo mecanismo de exportacion CSV del modulo funcional. */
