@@ -424,8 +424,14 @@ class WhatsappController {
     // Handle Status Update (Twilio StatusCallback)
     static async handleStatusUpdate(req, res) {
         try {
-            const { MessageSid, MessageStatus } = req.body;
+            const { MessageSid, MessageStatus, ErrorCode, ErrorMessage } = req.body;
             console.log(`🔔 Actualización de Estado Twilio: ${MessageSid} -> ${MessageStatus}`);
+            // Loguear SIEMPRE el código de error cuando Twilio/Meta lo envían.
+            // Es la razón exacta por la que un mensaje quedó failed/undelivered.
+            if (ErrorCode) {
+                console.error(`   🚨 ErrorCode Twilio/Meta: ${ErrorCode}${ErrorMessage ? ` - ${ErrorMessage}` : ''}`);
+                console.error(`   🚨 Detalle: https://www.twilio.com/docs/api/errors/${ErrorCode}`);
+            }
             if (!MessageSid) {
                 res.status(400).send('Missing MessageSid');
                 return;
@@ -444,13 +450,29 @@ class WhatsappController {
                 return;
             }
             const messageId = messages[0].id;
+            const currentStatus = messages[0].status;
             const newStatus = mapTwilioStatusToEspo(MessageStatus);
-            // 2. Actualizar estado
-            if (newStatus !== messages[0].status) {
-                await espoClient.updateEntity('WhatsappMessage', messageId, {
-                    status: newStatus
-                });
+            // Los callbacks de Twilio pueden llegar DESORDENADOS (ej: 'undelivered' y
+            // luego un 'sent' tardío). Un estado más avanzado o terminal nunca debe
+            // ser pisado por uno anterior.
+            const statusRank = {
+                'Queued': 0,
+                'Sent': 1,
+                'Delivered': 2,
+                'Read': 3,
+                'Error': 3, // Terminal: un 'sent' tardío no debe ocultar el fallo
+            };
+            const currentRank = statusRank[currentStatus] ?? 0;
+            const newRank = statusRank[newStatus] ?? 0;
+            if (newRank <= currentRank) {
+                console.log(`   ↪ Ignorado: estado actual '${currentStatus}' tiene precedencia sobre '${newStatus}' (callback fuera de orden)`);
+                res.status(200).send('OK (stale status ignored)');
+                return;
             }
+            // 2. Actualizar estado
+            await espoClient.updateEntity('WhatsappMessage', messageId, {
+                status: newStatus
+            });
             res.status(200).send('OK');
         }
         catch (error) {
