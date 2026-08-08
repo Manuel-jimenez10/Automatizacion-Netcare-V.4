@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { EspoCRMClient } from '../services/espocrm-api-client.service';
 import { sendTextMessage } from '../services/twilio.service';
+import { adminNotificationService } from '../services/admin-notification.service';
 import { env } from '../config/env';
 
 const espoClient = new EspoCRMClient();
@@ -64,9 +65,9 @@ export class WhatsappController {
       // Permitimos Body vacío si hay adjuntos (NumMedia > 0)
       const hasMedia = parseInt(NumMedia || '0') > 0;
       console.log(`🔍 Validación: HasMedia=${hasMedia}, Body="${Body}", NumMediaRaw="${NumMedia}"`);
-      
-      if (!From || (!Body && !hasMedia)) {
-         console.warn('❌ Rechazado por validación (Falta Body y no hay Media)');
+
+      if (!From) {
+         console.warn('❌ Rechazado por validación (Falta From)');
          res.status(400).send('Missing From or Body');
          return;
       }
@@ -74,17 +75,76 @@ export class WhatsappController {
       // Cleanup Phone (Twilio sends whatsapp:+123456)
       const phone = From.replace('whatsapp:', '');
 
+      // Se calcula aquí arriba porque el corte por administrador debe dejar
+      // pasar las solicitudes de XML (ver más abajo).
+      const buttonPayload = req.body.ButtonPayload || '';
+      const isXmlRequest = (
+        (Body && Body.trim().toLowerCase() === 'solicitar mi xml') ||
+        buttonPayload === 'solicitar_xml'
+      );
+
+      // =============================================
+      // RESPUESTA DE UN ADMINISTRADOR (notificaciones)
+      // =============================================
+      // Cualquier mensaje que nos envíe un administrador abre/reinicia su
+      // ventana de 24h, que es lo que nos permite avisarle con texto plano
+      // en vez de gastar el template una y otra vez.
+      //
+      // Se comprueba ANTES de exigir Body: una reacción 👍 llega sin Body y sin
+      // media, y es justo el gesto más probable para acusar recibo.
+      //
+      // Además cortamos el flujo aquí: sus respuestas son ruido interno y no
+      // deben crear conversaciones ni mensajes en EspoCRM (ni, sobre todo,
+      // volver a disparar notificaciones → bucle infinito).
+      const isAdmin = adminNotificationService.isAdminPhone(phone);
+
+      if (isAdmin) {
+        adminNotificationService.registerAdminReply(phone, Body);
+
+        // Excepción: si ese número pidió su XML, es una interacción de cliente
+        // real y debe atenderse con normalidad. Cortar aquí le dejaría sin
+        // respuesta a un botón que sí pulsó.
+        if (!env.adminNotificationLogAdminRepliesInCrm && !isXmlRequest) {
+          console.warn(
+            `⚠️ Mensaje de ${phone} descartado: es un número de ADMIN_NOTIFICATION_PHONES. No se registra en EspoCRM.`,
+          );
+          res.status(200).send('<Response></Response>');
+          return;
+        }
+        console.log('ℹ️ El mensaje del administrador continúa por el flujo normal (solicitud de XML o ADMIN_NOTIFICATION_LOG_ADMIN_REPLIES=true)');
+      }
+
+      if (!Body && !hasMedia) {
+         console.warn('❌ Rechazado por validación (Falta Body y no hay Media)');
+         res.status(400).send('Missing From or Body');
+         return;
+      }
+
+      if (!isAdmin) {
+        // =============================================
+        // NOTIFICACIÓN A ADMINISTRADORES
+        // =============================================
+        // Se dispara ANTES de tocar EspoCRM para que el aviso llegue aunque
+        // el CRM esté caído o lento, y sin bloquear la respuesta a Twilio.
+        adminNotificationService
+          .notifyNewClientMessage({
+            fromPhone: phone,
+            body: Body || (hasMedia ? '📎 [Archivo Adjunto]' : ''),
+            dedupeKey: MessageSid,
+            source: 'twilio-webhook',
+          })
+          .catch((err: any) =>
+            console.error('⚠️ [Notif Admin] Error no controlado al notificar:', err.message),
+          );
+      }
+
       // =============================================
       // DETECCIÓN DE QUICK REPLY: "Solicitar mi XML"
       // =============================================
       // Cuando el cliente presiona el botón "Solicitar mi XML" en WhatsApp,
       // Twilio envía el texto del botón como Body del mensaje entrante.
       // Detectamos esto y enviamos el XML como mensaje libre (free-form).
-      const buttonPayload = req.body.ButtonPayload || '';
-      const isXmlRequest = (
-        (Body && Body.trim().toLowerCase() === 'solicitar mi xml') ||
-        buttonPayload === 'solicitar_xml'
-      );
+      // (isXmlRequest se calculó arriba, junto al corte por administrador.)
 
       if (isXmlRequest) {
         console.log(`\n📎 ============================================`);
@@ -468,6 +528,17 @@ export class WhatsappController {
       if (!MessageSid) {
          res.status(400).send('Missing MessageSid');
          return;
+      }
+
+      // Las notificaciones internas a administradores no existen en EspoCRM.
+      // Cortamos aquí para no gastar consultas ni llenar el log de warnings.
+      // (Solo llegan por esta ruta si Twilio tiene un callback global en consola;
+      // el envío usa /api/admin-notifications/status-callback.)
+      if (adminNotificationService.isNotificationSid(MessageSid)) {
+        console.log(`   ↪ SID de notificación interna a administradores — no se busca en EspoCRM`);
+        adminNotificationService.handleDeliveryFailure(MessageSid, ErrorCode);
+        res.status(200).send('OK (admin notification)');
+        return;
       }
 
       // 1. Buscar el mensaje en EspoCRM por messageSid

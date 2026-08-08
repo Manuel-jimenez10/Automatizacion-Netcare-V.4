@@ -9,6 +9,7 @@ import mediaRoutes from './media.routes';
 import whatsappTemplateRoutes from './whatsapp-template.routes';
 import whatsappInitRoutes from './whatsapp-init.routes';
 import xmlCacheRoutes from './xml-cache.routes';
+import adminNotificationRoutes from './admin-notification.routes';
 
 const router = Router();
 
@@ -22,5 +23,6 @@ router.use('/media', mediaRoutes);
 router.use('/templates', whatsappTemplateRoutes);
 router.use('/whatsapp-init', whatsappInitRoutes);
 router.use('/xml-cache', xmlCacheRoutes);
+router.use('/admin-notifications', adminNotificationRoutes);
 
 export default router;

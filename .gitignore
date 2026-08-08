@@ -1,6 +1,10 @@
 # Env
 .env
 .env.*
+!.env.example
+
+# Estado de las ventanas de 24h de notificaciones a administradores
+data/
 
 # Node
 node_modules/

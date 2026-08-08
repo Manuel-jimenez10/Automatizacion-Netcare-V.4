@@ -521,6 +521,62 @@ export const sendTextMessage = async ({
   }
 };
 
+// =============================================
+// CONSULTA DE HISTORIAL (ventana de 24h)
+// =============================================
+
+/**
+ * Devuelve la fecha del último mensaje ENTRANTE recibido desde `phone`
+ * dentro de las últimas `hours` horas, o `null` si no hubo ninguno.
+ *
+ * Se usa para reconstruir la ventana de servicio de 24 horas tras un reinicio
+ * del proceso (en Render el disco es efímero entre despliegues).
+ */
+export const getLastInboundMessageDate = async (
+  phone: string,
+  hours = 24,
+): Promise<Date | null> => {
+  if (!phone) return null;
+
+  const { phoneVariants } = await import('../utils/notification-phone.utils');
+  const variants = phoneVariants(phone);
+  if (variants.length === 0) return null;
+
+  const dateSentAfter = new Date(Date.now() - hours * 60 * 60 * 1000);
+  let latest: Date | null = null;
+  let succeeded = false;
+  let lastError: any = null;
+
+  for (const variant of variants) {
+    try {
+      const messages = await client.messages.list({
+        from: `whatsapp:${variant}`,
+        dateSentAfter,
+        limit: 20,
+      });
+      succeeded = true;
+
+      for (const message of messages) {
+        if (message.direction !== 'inbound' || !message.dateSent) continue;
+        const sentAt = new Date(message.dateSent);
+        if (!latest || sentAt > latest) latest = sentAt;
+      }
+    } catch (error: any) {
+      lastError = error;
+      console.warn(
+        `⚠️ No se pudo consultar el historial de Twilio para ${variant}: ${error.message}`,
+      );
+    }
+  }
+
+  // Si NINGUNA consulta funcionó, propagamos el error. Devolver null haría que
+  // "la API falló" fuese indistinguible de "no hay mensajes", y quien llama
+  // cachearía para siempre una ventana cerrada que en realidad está abierta.
+  if (!succeeded && lastError) throw lastError;
+
+  return latest;
+};
+
 interface SendMediaParams {
   phone: string;
   mediaUrls: string[];     // URLs públicas de los archivos
@@ -679,12 +735,14 @@ interface DynamicTemplateParams {
   phone: string;
   contentSid: string;                         // SID del template (viene de WhatsappTemplate)
   contentVariables: Record<string, string>;   // {{1}}, {{2}}, etc.
+  statusCallback?: string;                    // Override del callback global
 }
 
 export const sendDynamicTemplateMessage = async ({
   phone,
   contentSid,
   contentVariables,
+  statusCallback,
 }: DynamicTemplateParams) => {
   if (!phone) throw new Error('El número de teléfono es requerido');
   if (!contentSid) throw new Error('El contentSid del template es requerido');
@@ -698,11 +756,14 @@ export const sendDynamicTemplateMessage = async ({
   console.log(`📦 Variables enviadas a Twilio:`, JSON.stringify(contentVariables));
 
   try {
-    // Validación de Status Callback URL (misma lógica que las demás funciones)
+    // Validación de Status Callback URL (misma lógica que las demás funciones).
+    // `statusCallback` permite que un módulo use su propio endpoint en vez del
+    // global (p. ej. las notificaciones internas a administradores).
     let validatedCallbackUrl: string | undefined = undefined;
+    const callbackSource = statusCallback || env.twilioStatusCallbackUrl;
 
-    if (env.twilioStatusCallbackUrl) {
-      const rawUrl = env.twilioStatusCallbackUrl.trim();
+    if (callbackSource) {
+      const rawUrl = callbackSource.trim();
       const hasProtocol = rawUrl.startsWith('https://') || rawUrl.startsWith('http://');
       const hasDoubleUrl = /https?:\/\/.*https?:\/\//.test(rawUrl);
       const hasSpace = /\s/.test(rawUrl);

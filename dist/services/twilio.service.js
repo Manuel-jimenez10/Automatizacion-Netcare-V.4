@@ -1,9 +1,42 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendDynamicTemplateMessage = exports.sendPrefacturaReminderMessage = exports.sendMediaMessage = exports.sendTextMessage = exports.sendFacturaXmlButtonMessage = exports.sendFacturaAdicionalMessage = exports.sendFacturaPresentedMessage = exports.sendInvoiceConfirmedMessage = exports.sendQuotePresentedMessage = exports.sendQuoteFollowUpMessage = void 0;
+exports.sendDynamicTemplateMessage = exports.sendPrefacturaReminderMessage = exports.sendMediaMessage = exports.getLastInboundMessageDate = exports.sendTextMessage = exports.sendFacturaXmlButtonMessage = exports.sendFacturaAdicionalMessage = exports.sendFacturaPresentedMessage = exports.sendInvoiceConfirmedMessage = exports.sendQuotePresentedMessage = exports.sendQuoteFollowUpMessage = void 0;
 const twilio_1 = __importDefault(require("twilio"));
 const env_1 = require("../config/env");
 const client = (0, twilio_1.default)(env_1.env.twilioAccountSid, env_1.env.twilioAuthToken);
@@ -395,6 +428,56 @@ const sendTextMessage = async ({ phone, text, statusCallback, }) => {
     }
 };
 exports.sendTextMessage = sendTextMessage;
+// =============================================
+// CONSULTA DE HISTORIAL (ventana de 24h)
+// =============================================
+/**
+ * Devuelve la fecha del último mensaje ENTRANTE recibido desde `phone`
+ * dentro de las últimas `hours` horas, o `null` si no hubo ninguno.
+ *
+ * Se usa para reconstruir la ventana de servicio de 24 horas tras un reinicio
+ * del proceso (en Render el disco es efímero entre despliegues).
+ */
+const getLastInboundMessageDate = async (phone, hours = 24) => {
+    if (!phone)
+        return null;
+    const { phoneVariants } = await Promise.resolve().then(() => __importStar(require('../utils/notification-phone.utils')));
+    const variants = phoneVariants(phone);
+    if (variants.length === 0)
+        return null;
+    const dateSentAfter = new Date(Date.now() - hours * 60 * 60 * 1000);
+    let latest = null;
+    let succeeded = false;
+    let lastError = null;
+    for (const variant of variants) {
+        try {
+            const messages = await client.messages.list({
+                from: `whatsapp:${variant}`,
+                dateSentAfter,
+                limit: 20,
+            });
+            succeeded = true;
+            for (const message of messages) {
+                if (message.direction !== 'inbound' || !message.dateSent)
+                    continue;
+                const sentAt = new Date(message.dateSent);
+                if (!latest || sentAt > latest)
+                    latest = sentAt;
+            }
+        }
+        catch (error) {
+            lastError = error;
+            console.warn(`⚠️ No se pudo consultar el historial de Twilio para ${variant}: ${error.message}`);
+        }
+    }
+    // Si NINGUNA consulta funcionó, propagamos el error. Devolver null haría que
+    // "la API falló" fuese indistinguible de "no hay mensajes", y quien llama
+    // cachearía para siempre una ventana cerrada que en realidad está abierta.
+    if (!succeeded && lastError)
+        throw lastError;
+    return latest;
+};
+exports.getLastInboundMessageDate = getLastInboundMessageDate;
 const sendMediaMessage = async ({ phone, mediaUrls, body, statusCallback, }) => {
     if (!phone)
         throw new Error('El número de teléfono es requerido');
@@ -499,7 +582,7 @@ const sendPrefacturaReminderMessage = async ({ phone, clientName, invoiceName, f
     }
 };
 exports.sendPrefacturaReminderMessage = sendPrefacturaReminderMessage;
-const sendDynamicTemplateMessage = async ({ phone, contentSid, contentVariables, }) => {
+const sendDynamicTemplateMessage = async ({ phone, contentSid, contentVariables, statusCallback, }) => {
     if (!phone)
         throw new Error('El número de teléfono es requerido');
     if (!contentSid)
@@ -511,10 +594,13 @@ const sendDynamicTemplateMessage = async ({ phone, contentSid, contentVariables,
     console.log(`   - Template SID: ${contentSid}`);
     console.log(`📦 Variables enviadas a Twilio:`, JSON.stringify(contentVariables));
     try {
-        // Validación de Status Callback URL (misma lógica que las demás funciones)
+        // Validación de Status Callback URL (misma lógica que las demás funciones).
+        // `statusCallback` permite que un módulo use su propio endpoint en vez del
+        // global (p. ej. las notificaciones internas a administradores).
         let validatedCallbackUrl = undefined;
-        if (env_1.env.twilioStatusCallbackUrl) {
-            const rawUrl = env_1.env.twilioStatusCallbackUrl.trim();
+        const callbackSource = statusCallback || env_1.env.twilioStatusCallbackUrl;
+        if (callbackSource) {
+            const rawUrl = callbackSource.trim();
             const hasProtocol = rawUrl.startsWith('https://') || rawUrl.startsWith('http://');
             const hasDoubleUrl = /https?:\/\/.*https?:\/\//.test(rawUrl);
             const hasSpace = /\s/.test(rawUrl);

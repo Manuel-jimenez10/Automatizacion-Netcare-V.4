@@ -57,6 +57,131 @@ Para activarlo desde el checkbox de EspoCRM, el workflow del registro
 enviando el ID del registro. El endpoint anterior `/api/templates/send` conserva
 el comportamiento basado en reporte.
 
+### Notificaciones a administradores (mensajes entrantes)
+
+Por **cada mensaje nuevo de un cliente** se avisa a los números configurados en
+`ADMIN_NOTIFICATION_PHONES`. El aviso se envía por uno de dos canales según el
+estado de la **ventana de servicio de 24 h de cada administrador**:
+
+| Estado de la ventana del admin | Canal usado | Por qué |
+|---|---|---|
+| Cerrada (no nos ha escrito en 24 h) | Template aprobado `ADMIN_NOTIFICATION_TEMPLATE_SID` | Es lo único que WhatsApp permite fuera de la ventana |
+| Abierta (nos escribió hace < 24 h) | Texto plano con el **mismo formato** del template | No gasta el template ante Meta |
+
+```
+🔔 Tienes un mensaje nuevo de {{1}}.
+El contenido es el siguiente: {{2}}. ¡Revisa los detalles en el sistema!
+```
+
+- `{{1}}` = teléfono del cliente que escribió
+- `{{2}}` = contenido de su mensaje
+
+**Cada mensaje que envíe el administrador reinicia su ventana a 24 h**, así que
+mientras siga contestando de vez en cuando el template no se vuelve a usar. La
+ventana se lleva **por administrador**, de forma independiente: uno puede estar
+recibiendo texto plano mientras otro sigue recibiendo el template.
+
+#### Flujo completo
+
+```
+Cliente escribe ──► POST /api/whatsapp/incoming
+                         │
+                         ├─ ¿el remitente es un administrador?
+                         │     SÍ → se reinicia su ventana de 24h y se corta
+                         │          (no se crea nada en el CRM, no hay bucle)
+                         │
+                         └─ NO → por cada administrador:
+                                   ventana abierta  → texto plano
+                                   ventana cerrada  → template
+                                 (en paralelo continúa el registro en EspoCRM)
+```
+
+#### Endpoints
+
+Todos exigen el secreto compartido `INTERNAL_WEBHOOK_SECRET`
+(`ADMIN_NOTIFICATION_REQUIRE_SECRET=true` por defecto), en el header
+`x-webhook-secret` o en el body `{ "secret": "..." }`. Sin esa protección
+cualquiera podría usarlos para emitir WhatsApp a los administradores.
+
+**POST** `/api/admin-notifications/whatsapp-message`
+Disparador opcional desde un workflow de EspoCRM cuando se **crea** un
+`WhatsappMessage`. Acepta el payload completo de la entidad o solo `{ "id": "..." }`.
+Solo notifica los mensajes con `type = "In"`; responde `202` de inmediato y
+notifica en segundo plano. La deduplicación por `messageSid` evita el aviso
+doble si Twilio ya lo notificó por el webhook.
+
+```bash
+curl -X POST https://<tu-app>/api/admin-notifications/whatsapp-message \
+  -H "Content-Type: application/json" \
+  -H "x-webhook-secret: $INTERNAL_WEBHOOK_SECRET" \
+  -d '{"id":"ID_DEL_WHATSAPPMESSAGE"}'
+```
+
+**GET** `/api/admin-notifications/status`
+Estado de la ventana de cada administrador: si está abierta, minutos restantes,
+qué canal se usará en el próximo aviso, templates de la última hora y si hay una
+pausa activa. Los teléfonos van enmascarados (`?reveal=true` los muestra).
+El secreto va **solo en el header** (la app loguea cada `req.url`, así que en la
+query string acabaría escrito en los logs).
+
+```bash
+curl -H "x-webhook-secret: $INTERNAL_WEBHOOK_SECRET" \
+  https://<tu-app>/api/admin-notifications/status
+```
+
+**POST** `/api/admin-notifications/test`
+Envío de prueba. Body opcional: `{ "from": "+52...", "body": "texto" }`.
+
+**POST** `/api/admin-notifications/reset`
+Cierra las ventanas de 24 h para volver a probar el template. Body opcional:
+`{ "phone": "+52..." }`. **No** borra los contadores anti-spam ni el backoff: si
+lo hiciera, una sola petición desactivaría todas las protecciones.
+
+**POST** `/api/admin-notifications/status-callback`
+StatusCallback de Twilio para estos mensajes (lo llama Twilio, sin secreto).
+Escribe el resultado en el log y, si Meta rechazó el envío, activa el backoff.
+
+#### Detalles de implementación
+
+- **Anti-bucle**: los mensajes de un administrador nunca generan notificaciones,
+  y por defecto tampoco se registran en EspoCRM (`ADMIN_NOTIFICATION_LOG_ADMIN_REPLIES=false`).
+  El reconocimiento del administrador compara la forma canónica del número
+  (normalizando el "1" de México); **no** se comparan los últimos 10 dígitos,
+  porque eso confundiría clientes reales con administradores y sus mensajes se
+  perderían.
+- **Reacciones**: un 👍 llega sin texto y sin adjunto. La detección del
+  administrador ocurre antes de exigir contenido, así que reaccionar a la
+  notificación también abre la ventana de 24 h.
+- **Persistencia**: las ventanas se guardan en `data/admin-notification-sessions.json`
+  para sobrevivir reinicios. Como el disco de Render es efímero entre despliegues,
+  tras un arranque en frío la ventana también se **rehidrata consultando el
+  historial de Twilio** (`ADMIN_NOTIFICATION_REHYDRATE=true`).
+- **Fallback**: si Twilio responde `63016` (fuera de la ventana) al enviar texto
+  libre, se reintenta automáticamente con el template y se marca la ventana como
+  cerrada. Si rechaza el destino (`21211`/`63003`), se reintenta con la otra
+  variante del número mexicano (con o sin el "1").
+- **Freno ante Meta**: los errores `63018`, `63049`, `63051` y `429` pausan
+  **ambos canales** para ese administrador durante 1 hora. Esos códigos llegan
+  normalmente por el status callback (no en la respuesta de `messages.create`),
+  así que el backoff se activa también desde ahí. Además hay un tope de
+  `ADMIN_NOTIFICATION_MAX_TEMPLATES_PER_HOUR` (20 por defecto) que se **reserva
+  antes** de enviar, para que aguante una ráfaga concurrente de webhooks —
+  comprobarlo antes y contarlo después dejaría pasar la ráfaga entera, que es
+  justo lo que degradó el sender en el incidente de julio 2026.
+- **Apagado**: `ADMIN_NOTIFICATION_ENABLED=false` restaura el comportamiento
+  anterior por completo — incluidos los mensajes de esos números, que vuelven a
+  registrarse en EspoCRM con normalidad.
+- **Saneamiento**: el contenido del mensaje se limpia de saltos de línea, tabuladores
+  y espacios consecutivos (Meta los rechaza en variables de template) y se trunca a
+  `ADMIN_NOTIFICATION_MAX_BODY_CHARS`. La misma limpieza se aplica al texto plano
+  para que ambos canales se vean idénticos.
+- Las notificaciones **no se registran en EspoCRM** y usan su propio
+  `statusCallback`, para no ensuciar las conversaciones de los clientes ni gastar
+  consultas al CRM buscando SIDs que no existen allí.
+- **Restricción de despliegue**: el estado vive en el proceso. Está pensado para
+  **una sola instancia**; con varias, las ventanas divergen y la deduplicación
+  deja de ser fiable.
+
 ### Webhooks (Tasks)
 
 **POST** `/api/webhooks/task-completed`
@@ -106,7 +231,19 @@ TWILIO_QUOTE_TEMPLATE_SID=HXxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  # Template para segui
 
 # Webhook Security
 WEBHOOK_SECRET=tu_secreto_webhook
+
+# Notificaciones a administradores (mensajes entrantes)
+ADMIN_NOTIFICATION_PHONES=+521XXXXXXXXXX,+521XXXXXXXXXX,+58XXXXXXXXXX
+ADMIN_NOTIFICATION_TEMPLATE_SID=HXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+INTERNAL_WEBHOOK_SECRET=un_secreto_largo_y_aleatorio
 ```
+
+> El archivo `.env.example` en la raíz lista **todas** las variables del proyecto
+> con su descripción, incluidas las opcionales de notificaciones.
+>
+> ⚠️ Los teléfonos reales de los administradores y el secreto **no se versionan**:
+> se configuran en el entorno de despliegue (Render). Si `ADMIN_NOTIFICATION_PHONES`
+> queda vacía, la función simplemente no envía nada y lo avisa en el arranque.
 
 ### 2. Configurar Campo Custom en EspoCRM
 

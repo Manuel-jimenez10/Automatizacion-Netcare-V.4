@@ -1,0 +1,116 @@
+/**
+ * Utilidades de teléfonos para las notificaciones a administradores.
+ *
+ * Twilio/WhatsApp no siempre entrega el mismo formato para un mismo número
+ * (sobre todo en México, donde conviven +521XXXXXXXXXX y +52XXXXXXXXXX),
+ * así que todas las comparaciones se hacen sobre una clave canónica.
+ */
+
+/** Extrae solo los dígitos y quita el prefijo internacional 00. */
+export const toDigits = (phone: string): string =>
+  (phone || '').replace(/\D/g, '').replace(/^00/, '');
+
+/**
+ * Clave canónica de un teléfono para comparaciones.
+ * México: WhatsApp a veces entrega +521XXXXXXXXXX y otras +52XXXXXXXXXX
+ * para el mismo número. Normalizamos quitando ese "1" heredado.
+ */
+export const phoneKey = (phone: string): string => {
+  const digits = toDigits(phone);
+  if (digits.startsWith('521') && digits.length === 13) {
+    return `52${digits.slice(3)}`;
+  }
+  return digits;
+};
+
+/**
+ * Compara dos teléfonos tolerando el "1" heredado de México.
+ *
+ * Deliberadamente NO comparamos "los últimos 10 dígitos": un administrador
+ * venezolano (+58 412 129 2194, número nacional de 9 dígitos) colisionaría con
+ * cualquier celular mexicano 412 129 2194. Un falso positivo aquí haría que el
+ * mensaje de un CLIENTE se tratara como respuesta de administrador y se
+ * descartara sin registrarse en el CRM.
+ */
+export const isSamePhone = (a: string, b: string): boolean => {
+  const keyA = phoneKey(a);
+  const keyB = phoneKey(b);
+
+  return !!keyA && keyA === keyB;
+};
+
+/**
+ * Variantes de un número mexicano con y sin el "1" posterior al +52.
+ * Se usa al consultar el historial de Twilio, que guarda el número
+ * exactamente como llegó.
+ */
+export const phoneVariants = (phone: string): string[] => {
+  const digits = toDigits(phone);
+  if (!digits) return [];
+
+  const variants = new Set<string>([`+${digits}`]);
+
+  if (digits.startsWith('521') && digits.length === 13) {
+    variants.add(`+52${digits.slice(3)}`);
+  } else if (digits.startsWith('52') && digits.length === 12) {
+    variants.add(`+521${digits.slice(2)}`);
+  }
+
+  return [...variants];
+};
+
+/**
+ * Convierte "a, b; c" (o saltos de línea) en una lista de teléfonos E.164 únicos.
+ * Descarta entradas con menos de 10 dígitos.
+ */
+export const parsePhoneList = (raw: string): string[] => {
+  if (!raw) return [];
+
+  const seen = new Set<string>();
+  const list: string[] = [];
+
+  for (const part of raw.split(/[,;|\n\r]+/)) {
+    const digits = toDigits(part.trim());
+    if (digits.length < 10) continue;
+
+    const key = phoneKey(digits);
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    list.push(`+${digits}`);
+  }
+
+  return list;
+};
+
+/** Enmascara un teléfono para logs y respuestas HTTP: +5216******222 */
+export const maskPhone = (phone: string): string => {
+  const digits = toDigits(phone);
+  if (digits.length <= 7) return `+${digits}`;
+  return `+${digits.slice(0, 4)}${'*'.repeat(digits.length - 7)}${digits.slice(-3)}`;
+};
+
+/**
+ * Deja un texto apto para usarse como variable de un template de WhatsApp.
+ *
+ * Meta rechaza las variables que contienen saltos de línea, tabuladores o más
+ * de 4 espacios consecutivos ("Param text cannot have new-line/tab characters
+ * or more than 4 consecutive spaces"; Twilio lo suele reportar como 63021).
+ * Aplicamos la misma limpieza al texto libre para que el mensaje se vea
+ * IDÉNTICO por ambos caminos y el administrador no note la diferencia entre
+ * template y texto plano.
+ */
+export const sanitizeTemplateVariable = (value: string, maxLength = 600): string => {
+  let clean = (value || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+
+  if (!clean) clean = '(sin texto)';
+
+  if (maxLength > 1 && clean.length > maxLength) {
+    clean = `${clean.slice(0, maxLength - 1).trimEnd()}…`;
+  }
+
+  return clean;
+};
