@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.startQuoteFollowUpJob = void 0;
 const node_cron_1 = __importDefault(require("node-cron"));
 const quote_followup_service_1 = require("../services/quote-followup.service");
+const quote_followup_controller_1 = require("../controllers/quote-followup.controller");
 /**
  * Cron Job para el seguimiento automático de Quotes
  * Se ejecuta todos los días a las 09:00 AM
@@ -28,14 +29,26 @@ const startQuoteFollowUpJob = () => {
     console.log('🔧 Configurando job de seguimiento de Quotes...');
     // Ejecutar todos los días a las 09:00 AM
     node_cron_1.default.schedule('0 9 * * *', async () => {
-        console.log(`\n⏰ [${new Date().toISOString()}] Ejecutando job programado de seguimiento de Quotes`);
+        const startedAt = new Date().toISOString();
+        console.log(`\n⏰ [${startedAt}] Ejecutando job programado de seguimiento de Quotes`);
+        // Mismo candado que el endpoint manual: si alguien lo lanzó a mano a las
+        // 09:00, las dos ejecuciones leerían el mismo contador y duplicarían envíos.
+        if (!quote_followup_controller_1.QuoteFollowUpController.tryAcquire()) {
+            console.log('⚠️ Ya hay un proceso de seguimiento en curso. Se omite esta ejecución.');
+            return;
+        }
         try {
             const service = new quote_followup_service_1.QuoteFollowUpService();
-            await service.processQuoteFollowUps();
+            const result = await service.processQuoteFollowUps();
+            quote_followup_controller_1.QuoteFollowUpController.recordCronRun(result, startedAt);
         }
         catch (error) {
             console.error('❌ Error en el job de seguimiento de Quotes:', error.message);
             console.error(error.stack);
+            quote_followup_controller_1.QuoteFollowUpController.recordCronError(error.message);
+        }
+        finally {
+            quote_followup_controller_1.QuoteFollowUpController.release();
         }
     }, {
         timezone: 'America/Mexico_City' // Ajusta según tu zona horaria

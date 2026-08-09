@@ -84,12 +84,21 @@ class EspoCRMClient {
         }
     }
     // Método para buscar entidades con filtros
-    // Método para buscar entidades con filtros
-    async searchEntities(entityType, where) {
+    async searchEntities(entityType, where, options = {}) {
+        const { list } = await this.searchEntitiesPaged(entityType, where, options);
+        return list;
+    }
+    /**
+     * Igual que searchEntities pero devuelve también el `total` que reporta
+     * EspoCRM, para poder detectar cuándo la respuesta viene truncada por
+     * `maxSize` en vez de asumir que se procesó todo.
+     */
+    async searchEntitiesPaged(entityType, where, options = {}) {
         try {
             console.log(`🔍 Buscando ${entityType} con filtros (JSON):`, JSON.stringify(where));
             const params = {
-                maxSize: 200,
+                maxSize: options.maxSize ?? 200,
+                offset: options.offset ?? 0,
                 sortBy: 'createdAt',
                 asc: false,
             };
@@ -127,8 +136,12 @@ class EspoCRMClient {
             console.log(`📡 URL Generada (Check params): ${fullEndpoint}`);
             const response = await this.request('GET', fullEndpoint);
             const list = response.list || [];
-            console.log(`✅ Encontrados ${list.length} ${entityType}(s)`);
-            return list;
+            const total = typeof response.total === 'number' ? response.total : list.length;
+            console.log(`✅ Encontrados ${list.length} ${entityType}(s) (total en CRM: ${total})`);
+            if (total > params.offset + list.length) {
+                console.warn(`   ⚠️ Resultado TRUNCADO: quedan ${total - params.offset - list.length} ${entityType}(s) sin leer (maxSize=${params.maxSize}, offset=${params.offset})`);
+            }
+            return { list, total };
         }
         catch (error) {
             console.error(`Error al buscar ${entityType}:`, error.message);
@@ -178,12 +191,17 @@ class EspoCRMClient {
             throw new Error(`Error al crear ${entityType}: ${error.message}`);
         }
     }
-    // Actualizar una entidad
+    // Actualizar una entidad.
+    // Devuelve la entidad actualizada tal como la responde EspoCRM. Importante:
+    // EspoCRM IGNORA en silencio los atributos que no existen y responde 200,
+    // así que quien necesite estar seguro de que un campo se escribió debe
+    // comprobar el valor en esta respuesta.
     async updateEntity(entityType, entityId, data) {
         try {
             console.log(`📝 Actualizando ${entityType} ${entityId} con:`, data);
-            await this.request('PUT', `${entityType}/${entityId}`, data);
+            const response = await this.request('PUT', `${entityType}/${entityId}`, data);
             console.log(`✅ ${entityType} actualizado exitosamente`);
+            return response;
         }
         catch (error) {
             console.error(`Error al actualizar ${entityType}:`, error.message);

@@ -101,6 +101,46 @@ exports.env = {
     adminNotificationLogAdminRepliesInCrm: (process.env.ADMIN_NOTIFICATION_LOG_ADMIN_REPLIES || 'false').toLowerCase() === 'true',
     // Longitud maxima del contenido del mensaje dentro de la notificacion.
     adminNotificationMaxBodyChars: num(process.env.ADMIN_NOTIFICATION_MAX_BODY_CHARS, 600),
+    // ============================================================
+    // SEGUIMIENTO DE COTIZACIONES
+    // ============================================================
+    // Interruptor general del ciclo de seguimiento.
+    quoteFollowUpEnabled: (process.env.QUOTE_FOLLOWUP_ENABLED || 'true').toLowerCase() !== 'false',
+    // Template enviado al cliente: {{1}} = nombre del cliente, {{2}} = cotizacion.
+    // Variable NUEVA a proposito: reutilizar TWILIO_QUOTE_TEMPLATE_SID mezclaria
+    // los dos templates durante un despliegue parcial (el viejo lleva el PDF
+    // en {{1}} y los nombres desplazados).
+    quoteFollowUpTemplateSid: process.env.QUOTE_FOLLOWUP_SID || '',
+    // Template de aviso al administrador cuando se agotan los seguimientos:
+    // {{1}} = nombre de la cotizacion, {{2}} = telefono del billing contact.
+    quoteFollowUpExhaustedTemplateSid: process.env.QUOTE_FOLLOWUP_EXHAUSTED_SID || '',
+    // Texto equivalente para la ventana de 24h del administrador. Si esta vacio,
+    // el aviso SIEMPRE usa el template (no improvisamos la redaccion).
+    quoteFollowUpExhaustedTextFormat: process.env.QUOTE_FOLLOWUP_EXHAUSTED_TEXT || '',
+    // Avisar a los administradores al enviar el ultimo seguimiento.
+    quoteFollowUpNotifyAdmins: (process.env.QUOTE_FOLLOWUP_NOTIFY_ADMINS || 'true').toLowerCase() !== 'false',
+    // Campo entero de Quote que cuenta los seguimientos enviados.
+    quoteFollowUpCounterField: process.env.QUOTE_FOLLOWUP_COUNTER_FIELD || 'seguimientoCotizacion',
+    // Numero maximo de seguimientos por cotizacion.
+    quoteFollowUpMaxAttempts: num(process.env.QUOTE_FOLLOWUP_MAX_ATTEMPTS, 2),
+    // Dias que deben pasar entre seguimientos.
+    quoteFollowUpDays: num(process.env.QUOTE_FOLLOWUP_DAYS, 7),
+    // Tope de envios por corrida. El resto se difiere al dia siguiente: evita
+    // que el primer dia salgan cientos de templates de golpe. 0 = sin tope.
+    quoteFollowUpMaxPerRun: num(process.env.QUOTE_FOLLOWUP_MAX_PER_RUN, 40),
+    // Presupuesto diario compartido por el cron y las llamadas manuales. Sin el,
+    // repetir /run-followup vaciaria de golpe el backlog diferido. 0 = sin tope.
+    quoteFollowUpMaxPerDay: num(process.env.QUOTE_FOLLOWUP_MAX_PER_DAY, 120),
+    // Pausa entre envios, como en el resto de modulos del proyecto.
+    quoteFollowUpDelayMs: num(process.env.QUOTE_FOLLOWUP_DELAY_MS, 1500),
+    // Modo simulacion: calcula y loguea a quien se enviaria, sin enviar nada.
+    quoteFollowUpDryRun: (process.env.QUOTE_FOLLOWUP_DRY_RUN || 'false').toLowerCase() === 'true',
+    // Comprobar en Twilio si el cliente respondio (ademas del CRM).
+    quoteFollowUpCheckTwilio: (process.env.QUOTE_FOLLOWUP_CHECK_TWILIO || 'true').toLowerCase() !== 'false',
+    // Exigir INTERNAL_WEBHOOK_SECRET en /api/quotes/run-followup. Activo por
+    // defecto: ese endpoint dispara una campana de WhatsApp completa y hasta un
+    // prefetch de navegador la lanzaria.
+    quoteFollowUpRequireSecret: (process.env.QUOTE_FOLLOWUP_REQUIRE_SECRET || 'true').toLowerCase() !== 'false',
     // Exigir el secreto compartido en /api/admin-notifications/*. Activo por
     // defecto: sin el, esos endpoints serian un emisor de WhatsApp abierto a
     // internet. Se acepta en el header x-webhook-secret o en el body { secret }.
@@ -121,4 +161,10 @@ if (exports.env.adminNotificationEnabled) {
     if (exports.env.adminNotificationRequireSecret && !process.env.INTERNAL_WEBHOOK_SECRET) {
         console.warn('🚨 [Notif Admin] INTERNAL_WEBHOOK_SECRET no esta definida: /api/admin-notifications/* queda protegido por un secreto publicado en el codigo. Definela en el entorno.');
     }
+}
+if (exports.env.quoteFollowUpEnabled && !exports.env.quoteFollowUpTemplateSid) {
+    console.warn('⚠️ [Seguimiento Quotes] QUOTE_FOLLOWUP_SID no esta configurada: el ciclo de seguimiento no enviara nada.');
+}
+if (exports.env.quoteFollowUpEnabled && exports.env.quoteFollowUpNotifyAdmins && !exports.env.quoteFollowUpExhaustedTemplateSid) {
+    console.warn('⚠️ [Seguimiento Quotes] QUOTE_FOLLOWUP_EXHAUSTED_SID no esta configurada: no se avisara al administrador al agotar los seguimientos.');
 }

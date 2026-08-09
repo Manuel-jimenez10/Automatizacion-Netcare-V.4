@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { QuoteFollowUpService } from '../services/quote-followup.service';
+import { QuoteFollowUpController } from '../controllers/quote-followup.controller';
 
 /**
  * Cron Job para el seguimiento automático de Quotes
@@ -26,14 +27,26 @@ export const startQuoteFollowUpJob = () => {
   
   // Ejecutar todos los días a las 09:00 AM
   cron.schedule('0 9 * * *', async () => {
-    console.log(`\n⏰ [${new Date().toISOString()}] Ejecutando job programado de seguimiento de Quotes`);
-    
+    const startedAt = new Date().toISOString();
+    console.log(`\n⏰ [${startedAt}] Ejecutando job programado de seguimiento de Quotes`);
+
+    // Mismo candado que el endpoint manual: si alguien lo lanzó a mano a las
+    // 09:00, las dos ejecuciones leerían el mismo contador y duplicarían envíos.
+    if (!QuoteFollowUpController.tryAcquire()) {
+      console.log('⚠️ Ya hay un proceso de seguimiento en curso. Se omite esta ejecución.');
+      return;
+    }
+
     try {
       const service = new QuoteFollowUpService();
-      await service.processQuoteFollowUps();
+      const result = await service.processQuoteFollowUps();
+      QuoteFollowUpController.recordCronRun(result, startedAt);
     } catch (error: any) {
       console.error('❌ Error en el job de seguimiento de Quotes:', error.message);
       console.error(error.stack);
+      QuoteFollowUpController.recordCronError(error.message);
+    } finally {
+      QuoteFollowUpController.release();
     }
   }, {
     timezone: 'America/Mexico_City' // Ajusta según tu zona horaria

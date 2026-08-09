@@ -27,8 +27,14 @@ export interface AdminSessionState {
   lastInboundAt: number;
   /** Epoch ms del último template enviado (para el cooldown opcional). */
   lastTemplateAt: number;
-  /** Epoch ms de los templates de la última hora (tope anti-spam). */
+  /** Epoch ms de los templates de la última hora, por tipo de aviso. */
   templateTimestamps: number[];
+  /**
+   * Cupo por tipo de aviso. Sin esta separación, una tanda de avisos de
+   * cotizaciones consumiría el cupo horario y silenciaría durante una hora
+   * los avisos de mensajes entrantes, que son los urgentes.
+   */
+  templateTimestampsByKind?: Record<string, number[]>;
   /** Epoch ms hasta el que NO se envían templates (Meta nos frenó). */
   backoffUntil: number;
   /** Contadores acumulados, útiles para diagnóstico. */
@@ -52,6 +58,9 @@ const emptySession = (phone: string): AdminSessionState => ({
 });
 
 const HOUR_MS = 60 * 60 * 1000;
+
+/** Tipo de aviso por defecto: los mensajes entrantes de clientes. */
+export const DEFAULT_KIND = 'inbound';
 
 export class AdminNotificationSessionStore {
   private sessions = new Map<string, AdminSessionState>();
@@ -97,14 +106,27 @@ export class AdminNotificationSessionStore {
     return this.sessions.get(phoneKey(phone))?.lastTemplateAt || 0;
   }
 
-  /** Templates enviados a este administrador en la última hora. */
-  templatesInLastHour(phone: string): number {
+  /** Templates de ese tipo enviados a este administrador en la última hora. */
+  templatesInLastHour(phone: string, kind: string = DEFAULT_KIND): number {
     const session = this.sessions.get(phoneKey(phone));
     if (!session) return 0;
 
+    return this.recentTimestamps(session, kind).length;
+  }
+
+  /** Lista (ya podada) de marcas de tiempo de la última hora para ese tipo. */
+  private recentTimestamps(session: AdminSessionState, kind: string): number[] {
     const cutoff = Date.now() - HOUR_MS;
-    session.templateTimestamps = session.templateTimestamps.filter(t => t >= cutoff);
-    return session.templateTimestamps.length;
+
+    if (kind === DEFAULT_KIND) {
+      session.templateTimestamps = session.templateTimestamps.filter(t => t >= cutoff);
+      return session.templateTimestamps;
+    }
+
+    if (!session.templateTimestampsByKind) session.templateTimestampsByKind = {};
+    const current = session.templateTimestampsByKind[kind] || [];
+    session.templateTimestampsByKind[kind] = current.filter(t => t >= cutoff);
+    return session.templateTimestampsByKind[kind];
   }
 
   /** Milisegundos que faltan para que termine el backoff impuesto por Meta. */
@@ -159,14 +181,16 @@ export class AdminNotificationSessionStore {
     return session;
   }
 
-  markTemplateSent(phone: string, timestamp: number = Date.now()): void {
+  markTemplateSent(
+    phone: string,
+    timestamp: number = Date.now(),
+    kind: string = DEFAULT_KIND,
+  ): void {
     const session = this.ensure(phone);
     session.lastTemplateAt = timestamp;
     session.templatesSent += 1;
 
-    const cutoff = timestamp - HOUR_MS;
-    session.templateTimestamps = session.templateTimestamps.filter(t => t >= cutoff);
-    session.templateTimestamps.push(timestamp);
+    this.recentTimestamps(session, kind).push(timestamp);
 
     this.schedulePersist();
   }
@@ -182,9 +206,10 @@ export class AdminNotificationSessionStore {
    */
   reserveTemplateSlot(
     phone: string,
-    limits: { cooldownMs?: number; maxPerHour?: number } = {},
+    limits: { cooldownMs?: number; maxPerHour?: number; kind?: string } = {},
   ): { allowed: boolean; reason?: string; retryInMinutes?: number; timestamp?: number } {
     const now = Date.now();
+    const kind = limits.kind || DEFAULT_KIND;
 
     const backoffMs = this.backoffRemainingMs(phone);
     if (backoffMs > 0) {
@@ -208,28 +233,27 @@ export class AdminNotificationSessionStore {
     }
 
     const maxPerHour = limits.maxPerHour || 0;
-    if (maxPerHour > 0 && this.templatesInLastHour(phone) >= maxPerHour) {
+    if (maxPerHour > 0 && this.templatesInLastHour(phone, kind) >= maxPerHour) {
       return { allowed: false, reason: 'hourly_cap' };
     }
 
-    this.markTemplateSent(phone, now);
+    this.markTemplateSent(phone, now, kind);
     return { allowed: true, timestamp: now };
   }
 
   /** Devuelve el cupo reservado cuando el envío acabó fallando. */
-  releaseTemplateSlot(phone: string, timestamp?: number): void {
+  releaseTemplateSlot(phone: string, timestamp?: number, kind: string = DEFAULT_KIND): void {
     if (!timestamp) return;
 
     const session = this.sessions.get(phoneKey(phone));
     if (!session) return;
 
-    const index = session.templateTimestamps.lastIndexOf(timestamp);
-    if (index >= 0) session.templateTimestamps.splice(index, 1);
+    const timestamps = this.recentTimestamps(session, kind);
+    const index = timestamps.lastIndexOf(timestamp);
+    if (index >= 0) timestamps.splice(index, 1);
 
     if (session.templatesSent > 0) session.templatesSent -= 1;
-    session.lastTemplateAt = session.templateTimestamps.length
-      ? session.templateTimestamps[session.templateTimestamps.length - 1]
-      : 0;
+    session.lastTemplateAt = timestamps.length ? timestamps[timestamps.length - 1] : 0;
 
     this.schedulePersist();
   }

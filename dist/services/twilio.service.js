@@ -40,6 +40,12 @@ exports.sendDynamicTemplateMessage = exports.sendPrefacturaReminderMessage = exp
 const twilio_1 = __importDefault(require("twilio"));
 const env_1 = require("../config/env");
 const client = (0, twilio_1.default)(env_1.env.twilioAccountSid, env_1.env.twilioAuthToken);
+/**
+ * @deprecated Template antiguo de seguimiento ({{1}}=PDF, {{2}}=cliente,
+ * {{3}}=cotización). El ciclo de seguimiento usa ahora QUOTE_FOLLOWUP_SID a
+ * través de sendDynamicTemplateMessage ({{1}}=cliente, {{2}}=cotización, sin
+ * PDF). Se conserva por si hiciera falta volver atrás.
+ */
 const sendQuoteFollowUpMessage = async ({ phone, clientName, quoteName, pdfUrl, }) => {
     if (!phone)
         throw new Error('El número de teléfono es requerido');

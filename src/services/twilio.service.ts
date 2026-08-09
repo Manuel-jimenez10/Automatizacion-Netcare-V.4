@@ -13,6 +13,12 @@ interface QuoteFollowUpParams {
   pdfUrl?: string;
 }
 
+/**
+ * @deprecated Template antiguo de seguimiento ({{1}}=PDF, {{2}}=cliente,
+ * {{3}}=cotización). El ciclo de seguimiento usa ahora QUOTE_FOLLOWUP_SID a
+ * través de sendDynamicTemplateMessage ({{1}}=cliente, {{2}}=cotización, sin
+ * PDF). Se conserva por si hiciera falta volver atrás.
+ */
 export const sendQuoteFollowUpMessage = async ({
   phone,
   clientName,

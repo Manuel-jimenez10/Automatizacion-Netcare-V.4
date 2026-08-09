@@ -40,6 +40,9 @@ export interface EspoCRMQuote {
   followUpSentAt?: string; // Campo custom para marcar como notificada
   cotizacinPropuestaId?: string; // ID del archivo PDF adjunto
   cotizacinEnviadaPorWhatsapp?: string; // Fecha de último envío por WhatsApp
+  // Contador de seguimientos enviados. El nombre real del campo se configura
+  // con QUOTE_FOLLOWUP_COUNTER_FIELD; esta propiedad refleja el valor por defecto.
+  seguimientoCotizacion?: number;
   createdAt: string; // Fecha de creación (Date Quoted)
 }
 

@@ -1,3 +1,4 @@
+
 /**
  * Notificaciones a administradores por cada mensaje entrante de un cliente.
  *
@@ -72,6 +73,34 @@ export interface NewClientMessage {
 }
 
 export type DeliveryChannel = 'template' | 'text';
+
+/**
+ * Un aviso a administradores, independiente de qué lo originó.
+ *
+ * Todos los avisos comparten la misma maquinaria anti-bloqueo (ventana de 24h,
+ * reserva de cupo, tope por hora, backoff ante Meta): lo único que cambia es el
+ * template y sus variables.
+ */
+interface AdminBroadcast {
+  /** Content SID del template aprobado. */
+  templateSid: string;
+  /** Variables del template ({{1}}, {{2}}, ...). */
+  variables: Record<string, string>;
+  /**
+   * Texto equivalente para enviar dentro de la ventana de 24h. Si no se
+   * proporciona, SIEMPRE se usa el template: preferimos gastar template a
+   * enviar un texto que no coincida con lo que el administrador espera leer.
+   */
+  text?: string;
+  /** Etiqueta para los logs. */
+  label: string;
+  /**
+   * Tipo de aviso. Cada tipo lleva su propio cupo horario: si compartieran
+   * uno, una tanda de avisos de cotizaciones silenciaría durante una hora los
+   * avisos de mensajes entrantes, que son los urgentes.
+   */
+  kind: string;
+}
 
 export interface AdminDeliveryResult {
   phone: string;
@@ -335,18 +364,15 @@ export class AdminNotificationService {
     console.log(`   Origen: ${message.source || 'desconocido'} | SID/ID: ${key || 'n/a'}`);
     console.log('🔔 ============================================');
 
-    const settled = await Promise.allSettled(
-      this.admins.map(admin => this.deliverToAdmin(admin, fromVar, bodyVar, text)),
+    deliveries.push(
+      ...(await this.broadcastToAdmins({
+        templateSid: env.adminNotificationTemplateSid,
+        variables: { '1': fromVar, '2': bodyVar },
+        text,
+        label: 'mensaje entrante',
+        kind: 'inbound',
+      })),
     );
-
-    for (let i = 0; i < settled.length; i++) {
-      const outcome = settled[i];
-      deliveries.push(
-        outcome.status === 'fulfilled'
-          ? outcome.value
-          : { phone: this.admins[i], channel: null, error: String(outcome.reason) },
-      );
-    }
 
     const ok = deliveries.filter(d => d.sid).length;
     console.log(`🔔 [Notif Admin] Resultado: ${ok}/${deliveries.length} entregado(s)\n`);
@@ -363,11 +389,86 @@ export class AdminNotificationService {
     };
   }
 
+  /**
+   * Avisa a TODOS los administradores en paralelo. Nunca rechaza: cada fallo
+   * individual se devuelve como un resultado con `error`.
+   */
+  private async broadcastToAdmins(payload: AdminBroadcast): Promise<AdminDeliveryResult[]> {
+    const settled = await Promise.allSettled(
+      this.admins.map(admin => this.deliverToAdmin(admin, payload)),
+    );
+
+    return settled.map((outcome, i) =>
+      outcome.status === 'fulfilled'
+        ? outcome.value
+        : { phone: this.admins[i], channel: null, error: String(outcome.reason) },
+    );
+  }
+
+  /**
+   * Aviso de cotización sin respuesta tras agotar los seguimientos.
+   *
+   * Tiene su propio template y su propio interruptor, pero comparte la ventana
+   * de 24h, la reserva de cupo y el backoff con el resto de avisos: son
+   * mensajes al mismo destinatario desde el mismo sender, así que los límites
+   * de Meta se cuentan juntos.
+   */
+  async notifyQuoteFollowUpExhausted(params: {
+    quoteName: string;
+    clientPhone: string;
+  }): Promise<NotificationResult> {
+    const deliveries: AdminDeliveryResult[] = [];
+
+    // ADMIN_NOTIFICATION_ENABLED es el interruptor de emergencia: tiene que
+    // apagar TODOS los avisos, no solo los de mensajes entrantes.
+    if (!env.adminNotificationEnabled || !env.quoteFollowUpNotifyAdmins) {
+      return { notified: false, reason: 'disabled', deliveries };
+    }
+
+    if (!env.quoteFollowUpExhaustedTemplateSid) {
+      console.warn(
+        '⚠️ [Notif Admin] QUOTE_FOLLOWUP_EXHAUSTED_SID no configurado: no se avisa del segundo seguimiento.',
+      );
+      return { notified: false, reason: 'no_template', deliveries };
+    }
+
+    if (this.admins.length === 0) {
+      console.warn('⚠️ [Notif Admin] No hay administradores configurados (ADMIN_NOTIFICATION_PHONES)');
+      return { notified: false, reason: 'no_admins', deliveries };
+    }
+
+    const quoteVar = sanitizeTemplateVariable(params.quoteName, 120);
+    const phoneVar = sanitizeTemplateVariable(params.clientPhone, 40);
+
+    // Solo hay texto plano equivalente si el operador lo configuró: sin él,
+    // no sabemos cómo está redactado el template y no debemos improvisarlo.
+    const text = env.quoteFollowUpExhaustedTextFormat
+      ? env.quoteFollowUpExhaustedTextFormat
+          .replace(/\{\{\s*1\s*\}\}/g, quoteVar)
+          .replace(/\{\{\s*2\s*\}\}/g, phoneVar)
+      : undefined;
+
+    console.log(`🔔 [Notif Admin] Cotización "${quoteVar}" sin respuesta tras 2 seguimientos → avisando a ${this.admins.length} administrador(es)`);
+
+    deliveries.push(
+      ...(await this.broadcastToAdmins({
+        templateSid: env.quoteFollowUpExhaustedTemplateSid,
+        variables: { '1': quoteVar, '2': phoneVar },
+        text,
+        label: 'seguimiento agotado',
+        kind: 'quote-followup',
+      })),
+    );
+
+    const ok = deliveries.filter(d => d.sid).length;
+    console.log(`🔔 [Notif Admin] Aviso de seguimiento agotado: ${ok}/${deliveries.length} entregado(s)`);
+
+    return { notified: ok > 0, preview: text, deliveries };
+  }
+
   private async deliverToAdmin(
     admin: string,
-    fromVar: string,
-    bodyVar: string,
-    text: string,
+    payload: AdminBroadcast,
   ): Promise<AdminDeliveryResult> {
     try {
       await this.ensureRehydrated(admin);
@@ -382,9 +483,10 @@ export class AdminNotificationService {
         return { phone: admin, channel: null, skipped: 'throttle_backoff' };
       }
 
-      if (this.store.remainingMs(admin) > 0) {
+      // Solo usamos texto plano si el aviso trae un equivalente escrito.
+      if (payload.text && this.store.remainingMs(admin) > 0) {
         try {
-          return await this.sendFreeText(admin, text);
+          return await this.sendFreeText(admin, payload.text);
         } catch (error: any) {
           if (!this.isOutsideWindowError(error)) throw error;
 
@@ -395,7 +497,7 @@ export class AdminNotificationService {
         }
       }
 
-      return await this.sendTemplateNotification(admin, fromVar, bodyVar);
+      return await this.sendTemplateNotification(admin, payload);
     } catch (error: any) {
       if (THROTTLE_ERROR_CODES.has(Number(error?.code))) {
         this.store.setBackoff(admin, THROTTLE_BACKOFF_MS);
@@ -428,12 +530,11 @@ export class AdminNotificationService {
 
   private async sendTemplateNotification(
     admin: string,
-    fromVar: string,
-    bodyVar: string,
+    payload: AdminBroadcast,
   ): Promise<AdminDeliveryResult> {
-    if (!env.adminNotificationTemplateSid) {
-      const reason = 'ADMIN_NOTIFICATION_TEMPLATE_SID no configurado';
-      console.warn(`   ⚠️ [Notif Admin] ${reason}`);
+    if (!payload.templateSid) {
+      const reason = 'template no configurado';
+      console.warn(`   ⚠️ [Notif Admin] ${reason} (${payload.label})`);
       return { phone: admin, channel: null, skipped: reason };
     }
 
@@ -443,6 +544,7 @@ export class AdminNotificationService {
     const slot = this.store.reserveTemplateSlot(admin, {
       cooldownMs: env.adminNotificationTemplateCooldownMinutes * 60 * 1000,
       maxPerHour: env.adminNotificationMaxTemplatesPerHour,
+      kind: payload.kind,
     });
 
     if (!slot.allowed) {
@@ -458,21 +560,21 @@ export class AdminNotificationService {
       message = await this.withDestinationFallback(admin, to =>
         this.sendTemplate({
           phone: to,
-          contentSid: env.adminNotificationTemplateSid,
-          contentVariables: { '1': fromVar, '2': bodyVar },
+          contentSid: payload.templateSid,
+          contentVariables: payload.variables,
           statusCallback: this.statusCallbackUrl(),
         }),
       );
     } catch (error) {
       // No consumimos cupo por un mensaje que nunca salió.
-      this.store.releaseTemplateSlot(admin, slot.timestamp);
+      this.store.releaseTemplateSlot(admin, slot.timestamp, payload.kind);
       throw error;
     }
 
     this.trackSid(message?.sid, admin);
 
     console.log(
-      `   ✅ [Notif Admin] Template a ${maskPhone(admin)} (ventana cerrada) — SID: ${message?.sid}`,
+      `   ✅ [Notif Admin] Template "${payload.label}" a ${maskPhone(admin)} — SID: ${message?.sid}`,
     );
 
     return { phone: admin, channel: 'template', sid: message?.sid };

@@ -194,15 +194,85 @@ curl -X POST http://localhost:3000/api/webhooks/task-completed \
   -d '{"taskId": "123abc"}'
 ```
 
-### Seguimiento de Quotes
+### Seguimiento de cotizaciones
 
-**POST** `/api/quotes/run-followup`
-- Ejecuta manualmente el proceso de seguimiento de Quotes
-- Útil para testing y debugging
+Ciclo cerrado de **2 seguimientos** por cotización presentada. Antes no había
+contador: la única marca era la fecha del último envío y se reiniciaba en cada
+envío, así que el cliente recibía un template cada 7 días **indefinidamente**
+(~52 al año por cotización).
+
+```
+Cotización en 'Presented' + 7 días sin movimiento
+        │
+        ├─ contador 0 → 1   primer seguimiento
+        ├─ contador 1 → 2   segundo seguimiento + aviso al administrador
+        └─ contador 2       agotada: no se vuelve a enviar nunca
+
+En cualquier punto: si el cliente responde → el ciclo se cierra.
+```
+
+Template al cliente (`QUOTE_FOLLOWUP_SID`):
+
+```
+Hola {{1}}! Vimos que la cotización {{2}} sigue pendiente y queremos ayudarte
+a decidir mejor. ¿Cuál de estas opciones describe mejor tu situación?
+```
+
+- `{{1}}` = nombre del Billing Contact
+- `{{2}}` = nombre de la cotización
+
+Aviso al administrador al enviar el último seguimiento (`QUOTE_FOLLOWUP_EXHAUSTED_SID`):
+`{{1}}` = nombre de la cotización, `{{2}}` = teléfono del Billing Contact. Se
+envía a `ADMIN_NOTIFICATION_PHONES` reutilizando la misma maquinaria que las
+notificaciones de mensajes entrantes (ventana de 24 h, reserva de cupo, tope por
+hora y backoff ante Meta).
+
+**POST** `/api/quotes/run-followup` — ejecuta el ciclo. Responde `202` y procesa
+en segundo plano; `?dryRun=true` simula sin enviar nada. Exige el secreto
+(`QUOTE_FOLLOWUP_REQUIRE_SECRET=true` por defecto): este endpoint dispara una
+campaña completa y hasta un prefetch de navegador la lanzaría.
 
 ```bash
-curl -X POST http://localhost:3000/api/quotes/run-followup
+# Simulación: qué se enviaría hoy
+curl -X POST "https://<tu-app>/api/quotes/run-followup?dryRun=true" \
+  -H "x-webhook-secret: $INTERNAL_WEBHOOK_SECRET"
+
+# Resultado de la última ejecución (manual o del cron)
+curl -H "x-webhook-secret: $INTERNAL_WEBHOOK_SECRET" \
+  https://<tu-app>/api/quotes/followup-status
 ```
+
+**GET** `/api/quotes/followup-status` — resultado de la última corrida: enviados,
+cerrados por respuesta, diferidos por el tope y la lista de errores por cotización.
+
+#### Cómo se decide que el cliente respondió
+
+Dos fuentes independientes; basta con que **una** vea la respuesta:
+
+1. **EspoCRM** — `WhatsappMessage` de tipo `In` posteriores al último seguimiento.
+   Se compara la forma canónica del teléfono, porque el entrante llega como
+   `+521...` y el saliente se guardó como `+52...`.
+2. **Historial de Twilio** — no depende del CRM ni del script PHP que resuelve el
+   contacto, así que sobrevive a que el CRM esté degradado.
+
+Se prefiere **sobre-detectar**: un falso positivo solo nos ahorra un seguimiento;
+un falso negativo manda un segundo template a alguien que ya nos está hablando.
+
+#### Garantías de seguridad del ciclo
+
+- **El intento se reserva ANTES de enviar** (contador y fecha en un único PUT).
+  Si se enviara primero y ese PUT fallara, al día siguiente se reenviaría el
+  mismo template, y al otro también. Perder un seguimiento es barato; repetirlo no.
+- **Verificación del campo contador**: EspoCRM ignora en silencio los atributos
+  que no existen y responde `200`. Si el nombre de `QUOTE_FOLLOWUP_COUNTER_FIELD`
+  no coincide, el módulo **aborta la corrida entera** con un error explícito en
+  vez de enviar sin tope.
+- **Relectura por ID antes de enviar**: el listado puede quedar obsoleto durante
+  una corrida larga. Si la cotización ya pasó a `Closed Won`, no se envía.
+- **Candado compartido** entre el cron y el endpoint manual, **pausa** entre
+  envíos y **tope por corrida** (el resto se atiende al día siguiente).
+- Paginación real: antes se leían como máximo 200 cotizaciones y el resto se
+  ignoraba en silencio.
 
 ---
 
@@ -247,15 +317,22 @@ INTERNAL_WEBHOOK_SECRET=un_secreto_largo_y_aleatorio
 
 ### 2. Configurar Campo Custom en EspoCRM
 
-**IMPORTANTE:** Antes de ejecutar el sistema, debes crear un campo custom en EspoCRM:
+**IMPORTANTE:** el ciclo de seguimiento necesita un campo entero en `Quote`:
 
-1. Accede al panel de administración de EspoCRM
-2. Ve a **Administration > Entity Manager > Quote**
-3. Crea un nuevo campo:
-   - **Nombre:** `followUpSentAt`
-   - **Tipo:** DateTime
-   - **Etiqueta:** "Follow-up Sent At"
-   - **Descripción:** "Fecha y hora del primer envío de seguimiento"
+1. **Administration → Entity Manager → Quote → Fields**
+2. Campo de tipo **Integer**, etiqueta "Seguimiento Cotización"
+3. Copia su **nombre interno** (aparece bajo la etiqueta) en
+   `QUOTE_FOLLOWUP_COUNTER_FIELD`
+
+⚠️ EspoCRM genera el nombre interno quitando los acentos: si la etiqueta lleva
+tilde, el campo se llama `seguimientoCotizacin` (como los ya existentes
+`cotizacinPropuesta` y `cotizacinEnviadaPorWhatsapp`). Si el nombre no coincide,
+el módulo **aborta la corrida** con un error explícito antes de enviar nada —
+EspoCRM ignora en silencio los campos que no existen, así que sin esa
+comprobación el contador se leería siempre como 0 y no habría tope.
+
+El campo `followUpSentAt` que describían versiones anteriores de este documento
+**no se usa**: el control lo lleva el contador junto con `cotizacinEnviadaPorWhatsapp`.
 
 ### 3. Configurar Templates de WhatsApp en Twilio
 
@@ -302,61 +379,98 @@ npm start
 El cron job se ejecuta automáticamente al iniciar el servidor:
 - **Frecuencia:** Diaria
 - **Horario:** 09:00 AM
-- **Zona horaria:** America/Santo_Domingo (configurable en `src/jobs/quote-followup.job.ts`)
+- **Zona horaria:** America/Mexico_City (configurable en `src/jobs/quote-followup.job.ts`)
 
-### Criterios de Búsqueda
+Comparte candado con `POST /api/quotes/run-followup`: si el proceso ya está en
+marcha, la otra vía se salta esa ejecución en vez de duplicar envíos.
 
-El job busca Quotes que cumplan **todos** estos criterios:
+### Criterios
 
-1. ✅ `status = "Presented"`
-2. ✅ `datePresented <= (hoy - 7 días)`
-3. ✅ `followUpSentAt = null` (no notificadas previamente)
+Una cotización recibe seguimiento cuando cumple **todo** esto:
 
-### Flujo del Proceso
+1. `status = "Presented"` (se re-verifica leyendo la cotización justo antes de enviar)
+2. Han pasado ≥ `QUOTE_FOLLOWUP_DAYS` desde el último movimiento
+   (último WhatsApp enviado → fecha de presentación → última modificación → creación)
+3. El contador es menor que `QUOTE_FOLLOWUP_MAX_ATTEMPTS`
+4. El cliente **no** ha respondido desde ese último movimiento
+
+### Flujo del proceso
 
 ```
-1. Buscar Quotes elegibles
-   ↓
-2. Para cada Quote:
-   a. Obtener Account asociado
-   b. Obtener Billing Contact del Account
-   c. Extraer y validar teléfono
-   d. Enviar mensaje de WhatsApp
-   e. Marcar Quote con followUpSentAt = now()
-   ↓
-3. Generar resumen en logs
+1. Verificar que el campo contador existe en EspoCRM  (si no → abortar)
+2. Descargar TODAS las Presented (paginando)
+3. Por cada cotización:
+   a. Filtros baratos con los datos del listado (contador, días)
+   b. Releer la cotización por ID (estado y contador frescos)
+   c. Billing Contact → teléfono
+   d. ¿Respondió el cliente?  (EspoCRM + Twilio)  → sí: cerrar ciclo
+   e. Reservar el intento (contador + fecha, un solo PUT)
+   f. Enviar el template
+   g. Si era el último → avisar al administrador
+   h. Pausa
+4. Resumen con la lista de IDs por resultado
 ```
 
-### Prevención de Duplicados
+### Frenos de seguridad
 
-Una vez enviado el mensaje, la Quote se marca con `followUpSentAt` (fecha/hora actual). En futuras ejecuciones, el filtro excluirá Quotes con este campo lleno, garantizando **un solo envío por Quote**.
+| Freno | Variable | Por defecto |
+|---|---|---|
+| Máximo de seguimientos por cotización | `QUOTE_FOLLOWUP_MAX_ATTEMPTS` | 2 |
+| Envíos por corrida (el resto se difiere) | `QUOTE_FOLLOWUP_MAX_PER_RUN` | 40 |
+| Envíos por día (cron + llamadas manuales) | `QUOTE_FOLLOWUP_MAX_PER_DAY` | 120 |
+| Un seguimiento por cliente y corrida | — | siempre |
+| Pausa entre envíos | `QUOTE_FOLLOWUP_DELAY_MS` | 1500 ms |
+
+Si Twilio devuelve un código terminal (`21610` opt-out, `63049` marketing
+bloqueado, destino inválido), el ciclo de esa cotización se cierra en el acto:
+no habrá un segundo intento contra alguien que pidió no recibir mensajes.
+
+Y si **ninguna** de las dos fuentes puede comprobar si el cliente respondió
+(EspoCRM caído y Twilio con rate limit), esa cotización se pospone al día
+siguiente en vez de enviar a ciegas.
 
 ---
 
 ## 🧪 Testing
 
+### Suite automática
+
+```bash
+npm test
+```
+
+Cubre el ciclo de seguimiento (contador, corte por respuesta, topes, opt-out,
+abort por campo mal configurado) y las notificaciones a administradores
+(ventana de 24 h, deduplicación, backoff).
+
 ### Preparación en EspoCRM
 
-1. Crear campo custom `followUpSentAt` en Quote (ver sección Configuración)
+1. Crear el campo entero de seguimiento en Quote (ver sección Configuración)
 2. Crear una Quote de prueba:
    - Status: `Presented`
    - datePresented: 8 días atrás
-   - Account asociado con Billing Contact
    - Billing Contact con teléfono válido
 
-### Prueba Manual
+### Prueba manual
+
+**Empieza siempre por la simulación**: dice exactamente qué se enviaría, sin
+enviar nada.
 
 ```bash
-# Ejecutar proceso de seguimiento manualmente
-curl -X POST http://localhost:3000/api/quotes/run-followup
+curl -X POST "http://localhost:3000/api/quotes/run-followup?dryRun=true" \
+  -H "x-webhook-secret: $INTERNAL_WEBHOOK_SECRET"
+
+curl -H "x-webhook-secret: $INTERNAL_WEBHOOK_SECRET" \
+  http://localhost:3000/api/quotes/followup-status
 ```
 
 ### Verificación
 
-1. ✅ Revisar logs del servidor (consulta de Quotes, obtención de datos)
-2. ✅ Verificar que se envió el mensaje de WhatsApp
-3. ✅ Verificar en EspoCRM que la Quote tiene `followUpSentAt` lleno
-4. ✅ Ejecutar nuevamente y verificar que NO se envía mensaje duplicado
+1. ✅ El log muestra `Campo contador "..." verificado en EspoCRM`
+2. ✅ La simulación lista las cotizaciones esperadas con `would_send`
+3. ✅ Tras el envío real, el contador de la Quote sube en 1
+4. ✅ Al ejecutar de nuevo el mismo día, esas cotizaciones salen como `waiting`
+5. ✅ Al llegar el contador a 2, llega el aviso al administrador
 
 ---
 
@@ -420,7 +534,9 @@ src/
 - **Errores individuales:** Si una Quote falla, se loguea y se continúa con la siguiente
 - **Validaciones tempranas:** Se verifica que existan Account, Billing Contact y Phone antes de enviar
 - **Logs detallados:** Cada paso del proceso se registra para debugging
-- **Marcado condicional:** Solo se actualiza `followUpSentAt` si el envío fue exitoso
+- **Reserva antes del envío:** el contador y la fecha se escriben ANTES de llamar
+  a Twilio. Si se hiciera al revés y ese PUT fallara, el mismo template se
+  reenviaría cada día. Perder un seguimiento es barato; repetirlo no.
 
 ---
 

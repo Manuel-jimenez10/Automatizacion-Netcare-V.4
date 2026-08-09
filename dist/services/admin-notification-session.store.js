@@ -20,7 +20,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AdminNotificationSessionStore = void 0;
+exports.AdminNotificationSessionStore = exports.DEFAULT_KIND = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const notification_phone_utils_1 = require("../utils/notification-phone.utils");
@@ -34,6 +34,8 @@ const emptySession = (phone) => ({
     freeTextSent: 0,
 });
 const HOUR_MS = 60 * 60 * 1000;
+/** Tipo de aviso por defecto: los mensajes entrantes de clientes. */
+exports.DEFAULT_KIND = 'inbound';
 class AdminNotificationSessionStore {
     constructor(options = {}) {
         this.sessions = new Map();
@@ -68,14 +70,25 @@ class AdminNotificationSessionStore {
     lastTemplateAt(phone) {
         return this.sessions.get((0, notification_phone_utils_1.phoneKey)(phone))?.lastTemplateAt || 0;
     }
-    /** Templates enviados a este administrador en la última hora. */
-    templatesInLastHour(phone) {
+    /** Templates de ese tipo enviados a este administrador en la última hora. */
+    templatesInLastHour(phone, kind = exports.DEFAULT_KIND) {
         const session = this.sessions.get((0, notification_phone_utils_1.phoneKey)(phone));
         if (!session)
             return 0;
+        return this.recentTimestamps(session, kind).length;
+    }
+    /** Lista (ya podada) de marcas de tiempo de la última hora para ese tipo. */
+    recentTimestamps(session, kind) {
         const cutoff = Date.now() - HOUR_MS;
-        session.templateTimestamps = session.templateTimestamps.filter(t => t >= cutoff);
-        return session.templateTimestamps.length;
+        if (kind === exports.DEFAULT_KIND) {
+            session.templateTimestamps = session.templateTimestamps.filter(t => t >= cutoff);
+            return session.templateTimestamps;
+        }
+        if (!session.templateTimestampsByKind)
+            session.templateTimestampsByKind = {};
+        const current = session.templateTimestampsByKind[kind] || [];
+        session.templateTimestampsByKind[kind] = current.filter(t => t >= cutoff);
+        return session.templateTimestampsByKind[kind];
     }
     /** Milisegundos que faltan para que termine el backoff impuesto por Meta. */
     backoffRemainingMs(phone) {
@@ -121,13 +134,11 @@ class AdminNotificationSessionStore {
         }
         return session;
     }
-    markTemplateSent(phone, timestamp = Date.now()) {
+    markTemplateSent(phone, timestamp = Date.now(), kind = exports.DEFAULT_KIND) {
         const session = this.ensure(phone);
         session.lastTemplateAt = timestamp;
         session.templatesSent += 1;
-        const cutoff = timestamp - HOUR_MS;
-        session.templateTimestamps = session.templateTimestamps.filter(t => t >= cutoff);
-        session.templateTimestamps.push(timestamp);
+        this.recentTimestamps(session, kind).push(timestamp);
         this.schedulePersist();
     }
     /**
@@ -141,6 +152,7 @@ class AdminNotificationSessionStore {
      */
     reserveTemplateSlot(phone, limits = {}) {
         const now = Date.now();
+        const kind = limits.kind || exports.DEFAULT_KIND;
         const backoffMs = this.backoffRemainingMs(phone);
         if (backoffMs > 0) {
             return {
@@ -161,27 +173,26 @@ class AdminNotificationSessionStore {
             }
         }
         const maxPerHour = limits.maxPerHour || 0;
-        if (maxPerHour > 0 && this.templatesInLastHour(phone) >= maxPerHour) {
+        if (maxPerHour > 0 && this.templatesInLastHour(phone, kind) >= maxPerHour) {
             return { allowed: false, reason: 'hourly_cap' };
         }
-        this.markTemplateSent(phone, now);
+        this.markTemplateSent(phone, now, kind);
         return { allowed: true, timestamp: now };
     }
     /** Devuelve el cupo reservado cuando el envío acabó fallando. */
-    releaseTemplateSlot(phone, timestamp) {
+    releaseTemplateSlot(phone, timestamp, kind = exports.DEFAULT_KIND) {
         if (!timestamp)
             return;
         const session = this.sessions.get((0, notification_phone_utils_1.phoneKey)(phone));
         if (!session)
             return;
-        const index = session.templateTimestamps.lastIndexOf(timestamp);
+        const timestamps = this.recentTimestamps(session, kind);
+        const index = timestamps.lastIndexOf(timestamp);
         if (index >= 0)
-            session.templateTimestamps.splice(index, 1);
+            timestamps.splice(index, 1);
         if (session.templatesSent > 0)
             session.templatesSent -= 1;
-        session.lastTemplateAt = session.templateTimestamps.length
-            ? session.templateTimestamps[session.templateTimestamps.length - 1]
-            : 0;
+        session.lastTemplateAt = timestamps.length ? timestamps[timestamps.length - 1] : 0;
         this.schedulePersist();
     }
     markFreeTextSent(phone) {
