@@ -194,6 +194,106 @@ curl -X POST http://localhost:3000/api/webhooks/task-completed \
   -d '{"taskId": "123abc"}'
 ```
 
+### Mensaje informativo al cliente (desde el CRM)
+
+Permite a un agente escribir un texto en el CRM y enviárselo al cliente por
+WhatsApp marcando una casilla.
+
+```
+Estimado cliente {{1}},
+le queremos enviar información relacionada al servicio realizado recientemente.
+{{2}}.
+
+Atentamente,
+
+Netcare Mx
+```
+
+- `{{1}}` = `name` del Contact vinculado al mensaje
+- `{{2}}` = texto que escribe el agente
+
+**POST** `/api/whatsapp/send-info` — lo llama un workflow de EspoCRM al marcar la
+casilla. Mismo payload que `/api/whatsapp-init/send`:
+
+```json
+{
+  "contact_id": "{$contactId}",
+  "entity_id": "{$id}",
+  "whatsapp_converstion_id": "{$whatsappConverstionId}"
+}
+```
+
+El nombre del cliente sale del Contact del propio registro; `contact_id` es la
+red de seguridad por si ese enlace viniera vacío.
+
+Sin secreto por defecto, igual que el endpoint de iniciar conversación (esos
+workflows no envían cabeceras). Para exigirlo: `WHATSAPP_INFO_REQUIRE_SECRET=true`
+y añadir `"secret": "..."` al payload.
+
+#### Por qué hace falta un template
+
+El flujo que ya existía (`/api/whatsapp/outgoing`) envía **texto libre**, y
+WhatsApp solo lo permite dentro de las 24 h siguientes al último mensaje del
+cliente. Fuera de esa ventana Twilio responde `63016` y el mensaje **no llega**.
+Este endpoint elige el canal:
+
+| Estado del cliente | Canal | Saltos de línea |
+|---|---|---|
+| Escribió hace < 24 h | Texto plano | **Sí, se respetan** |
+| Ventana cerrada | Template aprobado | No: Meta los rechaza en las variables |
+
+Si Twilio no responde al comprobar la ventana, se asume **cerrada** y se usa el
+template: siempre llega, mientras que el texto libre fuera de ventana no.
+
+#### Configuración en EspoCRM
+
+Dos campos custom en la entidad `WhatsappMessage`. Créalos con etiquetas **sin
+acentos** y los nombres internos coincidirán con los valores por defecto:
+
+| Etiqueta | Nombre interno | Tipo | Variable |
+|---|---|---|---|
+| Texto Informacion | `textoInformacion` | Wysiwyg o Text | `WHATSAPP_INFO_TEXT_FIELD` |
+| Enviar Informacion | `enviarInformacion` | Bool (checkbox) | `WHATSAPP_INFO_TRIGGER_FIELD` |
+
+⚠️ **El workflow existente de `/api/whatsapp/outgoing` debe ignorar estos
+registros.** Si se dispara al crear un `WhatsappMessage` con `type='Out'`, ese
+mismo registro saldría dos veces: una como texto libre por el flujo antiguo y
+otra como template por éste. Añade al workflow antiguo la condición de que la
+casilla no esté marcada.
+
+#### El campo es Wysiwyg: se convierte el HTML
+
+EspoCRM guarda los campos Wysiwyg como **HTML**, no como texto. Enviarlo tal cual
+haría que el cliente viera `<p>...</p>` literal. El endpoint lo traduce, y de paso
+aprovecha el formato propio de WhatsApp:
+
+| En el editor | Le llega al cliente |
+|---|---|
+| **negrita** | `*negrita*` |
+| _cursiva_ | `_cursiva_` |
+| ~~tachado~~ | `~tachado~` |
+| Viñetas | `• punto` |
+| `&oacute;` `&amp;` `&nbsp;` | `ó` `&` espacio normal |
+| Párrafos y `<br>` | Saltos de línea reales |
+
+Un editor vacío (`<p><br></p>`) cuenta como campo vacío y **no** se envía. Si el
+texto no parece HTML se deja intacto, así que un `El costo es < 100 > 50` no se
+rompe.
+
+#### Protecciones
+
+- **No se reenvía**: si el registro ya tiene `messageSid`, se ignora.
+- **Sin dobles disparos**: dos llamadas simultáneas sobre el mismo registro solo
+  envían una vez.
+- **La casilla se desmarca** tras el envío, junto con el `messageSid` y el texto
+  final en `description`.
+- Si el campo del texto está vacío o mal configurado, **no se envía** y el error
+  dice qué nombre de campo se esperaba.
+
+> El punto que va detrás de `{{2}}` es parte de la plantilla. Si el agente
+> termina su texto con punto, el cliente verá dos. Considera quitarlo de la
+> plantilla al crearla en Twilio.
+
 ### Seguimiento de cotizaciones
 
 Ciclo cerrado de **2 seguimientos** por cotización presentada. Antes no había

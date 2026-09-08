@@ -102,6 +102,33 @@ exports.env = {
     // Longitud maxima del contenido del mensaje dentro de la notificacion.
     adminNotificationMaxBodyChars: num(process.env.ADMIN_NOTIFICATION_MAX_BODY_CHARS, 600),
     // ============================================================
+    // MENSAJE INFORMATIVO AL CLIENTE (desde el CRM, con checkbox)
+    // ============================================================
+    // Un agente escribe un texto en el WhatsappMessage y marca la casilla; el
+    // workflow de EspoCRM llama a /api/whatsapp/send-info.
+    whatsappInfoEnabled: (process.env.WHATSAPP_INFO_ENABLED || 'true').toLowerCase() !== 'false',
+    // Template: {{1}} = nombre del contacto, {{2}} = el texto que escribe el agente.
+    whatsappInfoTemplateSid: process.env.WHATSAPP_INFO_SID || '',
+    // Nombres INTERNOS de los campos custom en WhatsappMessage.
+    whatsappInfoTextField: process.env.WHATSAPP_INFO_TEXT_FIELD || 'textoInformacion',
+    whatsappInfoTriggerField: process.env.WHATSAPP_INFO_TRIGGER_FIELD || 'enviarInformacion',
+    // Texto plano equivalente, usado dentro de la ventana de 24h. Debe coincidir
+    // con el template salvo por los saltos de linea, que aqui SI se respetan.
+    whatsappInfoTextFormat: process.env.WHATSAPP_INFO_TEXT_FORMAT ||
+        'Estimado cliente {{1}},\nle queremos enviar información relacionada al servicio realizado recientemente. \n{{2}}.\n\nAtentamente,\n\nNetcare Mx',
+    // Usar texto plano cuando la ventana de 24h del cliente esta abierta.
+    whatsappInfoUseWindow: (process.env.WHATSAPP_INFO_USE_WINDOW || 'true').toLowerCase() !== 'false',
+    // Longitud maxima del texto del agente (el cuerpo total no puede pasar de
+    // ~1024 caracteres, y el texto fijo de la plantilla ya ocupa parte).
+    whatsappInfoMaxTextChars: num(process.env.WHATSAPP_INFO_MAX_TEXT_CHARS, 700),
+    // Exigir INTERNAL_WEBHOOK_SECRET en /api/whatsapp/send-info.
+    // Desactivado por defecto para igualar a /api/whatsapp-init/send, cuyo
+    // workflow tampoco manda cabeceras. El riesgo esta acotado: solo se puede
+    // disparar sobre un WhatsappMessage que ya exista, con texto escrito y sin
+    // messageSid, y cada registro se envia una sola vez. Aun asi, ponerlo en
+    // true y anadir "secret" al payload del workflow cierra el hueco.
+    whatsappInfoRequireSecret: (process.env.WHATSAPP_INFO_REQUIRE_SECRET || 'false').toLowerCase() === 'true',
+    // ============================================================
     // SEGUIMIENTO DE COTIZACIONES
     // ============================================================
     // Interruptor general del ciclo de seguimiento.
