@@ -439,8 +439,23 @@ export class WhatsappController {
       // 1. Obtener entidad completa para asegurar acceso a campos custom (archivoAdjuntoId)
       console.log(`🔍 Obteniendo detalles completos del mensaje ${initialEntity.id}...`);
       const entity = await espoClient.getEntity('WhatsappMessage', initialEntity.id);
-      
-      const phone = entity.name; 
+
+      // Registros del flujo "mensaje informativo" (casilla + campo Wysiwyg,
+      // ver whatsapp-info.service.ts): los envía /api/whatsapp/send-info con
+      // su propio template/ventana de 24h. El payload de ESTE webhook viejo
+      // no trae la casilla (solo manda id/name/type/text/messageSid), así que
+      // hay que comprobarla en la entidad completa recién leída, no en
+      // initialEntity. Se corta aquí para no intentar enviar el campo `Text`
+      // estándar (vacío para estos registros: el texto vive en el custom).
+      if (entity[env.whatsappInfoTriggerField]) {
+        console.log(
+          `ℹ️ Ignorando: es un mensaje informativo (casilla "${env.whatsappInfoTriggerField}"). Lo envía /api/whatsapp/send-info.`,
+        );
+        res.status(200).send({ status: 'ignored', reason: 'whatsapp_info_flow' });
+        return;
+      }
+
+      const phone = entity.name;
       let text = entity.text || entity.description || ''; // Texto opcional si hay media
       const attachmentId = entity.archivoAdjuntoId; // Campo custom usado por el usuario
       // const attachmentIds = entity.attachmentsIds; // Relación nativa (opcional futuro)
